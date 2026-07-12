@@ -8,7 +8,7 @@ app = Flask(__name__)
 # ==========================================================
 # ⚠️ BƯỚC NÀY QUAN TRỌNG: Hãy thay 2 thông tin bạn vừa lấy từ Supabase vào đây nhé!
 SUPABASE_URL = "https://leuwptvyrmqueyfgdeuo.supabase.co"
-SUPABASE_KEY = "sb_publishable_YY_dluN8BsDK7wM04ZyRig_gX6AEzC2"
+SUPABASE_KEY = "efe1d6dc-97d4-4007-964e-a5144359b5e9"
 # ==========================================================
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
