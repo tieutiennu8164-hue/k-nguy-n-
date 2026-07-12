@@ -1,0 +1,1235 @@
+import json
+import os
+import calendar
+from datetime import datetime, timedelta
+from flask import Flask, render_template_string, redirect, request, jsonify
+
+app = Flask(__name__)
+DATA_DIR = "."
+
+# Danh sách nhiệm vụ
+TASKS = [
+    "1. Dậy sớm trước 8:00", "2. Uống một cốc nước", "3. Đánh răng rửa mặt",
+    "4. Ăn sáng trước 8:00", "5. Không dùng ĐT 30p đầu ngày", "6. Làm việc",
+    "7. Hít đất 200 cái", "8. Kéo xà 100 cái", "9. Uống đủ 2 lít nước",
+    "10. Học 30p kiến thức mới & Ghi lại", "11. Dành ra 1 tiếng để học tập"
+]
+
+# MAP DANH MỤC CHI TIÊU
+CHILD_CATEGORIES = {
+    "Ăn uống": {"color": "#f97316", "parent": "Chi tiêu - sinh hoạt", "icon": "🍲"},
+    "Hóa đơn": {"color": "#34d399", "parent": "Chi phí cố định", "icon": "🧾"},
+    "Mua sắm": {"color": "#facc15", "parent": "Chi tiêu - sinh hoạt", "icon": "🛒"},
+    "Di chuyển": {"color": "#60a5fa", "parent": "Chi tiêu - sinh hoạt", "icon": "🚗"},
+    "Giải trí": {"color": "#fb7185", "parent": "Chi phí phát sinh", "icon": "🎬"},
+    "Chưa phân loại": {"color": "#f472b6", "parent": "Chưa phân loại", "icon": "❔"}
+}
+
+PARENT_CATEGORIES = {
+    "Chi tiêu - sinh hoạt": {"color": "#f97316", "icon": "📄"},
+    "Chi phí phát sinh": {"color": "#facc15", "icon": "💰"},
+    "Chi phí cố định": {"color": "#60a5fa", "icon": "🏠"},
+    "Chưa phân loại": {"color": "#f472b6", "icon": "❔"}
+}
+
+# MAP DANH MỤC THU NHẬP
+INCOME_CATEGORIES = {
+    "Tiền lương": {"color": "#22c55e", "icon": "💵"},
+    "Tiền thưởng": {"color": "#3b82f6", "icon": "🎁"},
+    "Đầu tư/Lãi": {"color": "#8b5cf6", "icon": "📈"},
+    "Khác (Thu)": {"color": "#ec4899", "icon": "💰"}
+}
+
+def save_data(date_str, data):
+    file_path = os.path.join(DATA_DIR, f"data_{date_str}.json")
+    save_payload = {
+        "date": data.get("date", date_str),
+        "status": data.get("status", [False]*len(TASKS)),
+        "expenses": data.get("expenses", [])
+    }
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(save_payload, f, ensure_ascii=False, indent=4)
+
+def process_financials(data):
+    data["list_in"] = [e for e in data.get("expenses", []) if e.get("type") == "in"]
+    data["list_out"] = [e for e in data.get("expenses", []) if e.get("type", "out") == "out"]
+    data["total_in"] = sum(e.get("amount", 0) for e in data["list_in"])
+    data["total_out"] = sum(e.get("amount", 0) for e in data["list_out"])
+    return data
+
+def get_or_create_data(date_str):
+    file_path = os.path.join(DATA_DIR, f"data_{date_str}.json")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except Exception:
+                data = {"date": date_str, "status": [False]*len(TASKS), "expenses": []}
+    else:
+        data = {"date": date_str, "status": [False]*len(TASKS), "expenses": []}
+        save_data(date_str, data)
+    return process_financials(data)
+
+def generate_chart_info(totals_dict, color_map, total_amount):
+    active_cats = {k: v for k, v in totals_dict.items() if v > 0}
+    sorted_cats = sorted(active_cats.items(), key=lambda x: x[1], reverse=True)
+    
+    chart_data = []
+    conic_gradient = []
+    current_percent = 0
+    
+    for cat, amount in sorted_cats:
+        pct = (amount / total_amount) * 100 if total_amount > 0 else 0
+        info = color_map.get(cat, {"color": "#9ca3af", "icon": "📦"})
+        
+        chart_data.append({
+            "name": cat, 
+            "amount": amount, 
+            "pct": round(pct), 
+            "color": info["color"],
+            "icon": info["icon"]
+        })
+        
+        next_percent = current_percent + pct
+        if len(sorted_cats) > 1 and pct > 1.5:
+            conic_gradient.append(f"{info['color']} {current_percent}% {next_percent - 1.5}%")
+            conic_gradient.append(f"white {next_percent - 1.5}% {next_percent}%")
+        else:
+            conic_gradient.append(f"{info['color']} {current_percent}% {next_percent}%")
+            
+        current_percent = next_percent
+
+    if not conic_gradient:
+        conic_gradient = ["#e2e8f0 0% 100%"]
+        
+    return chart_data, ", ".join(conic_gradient)
+
+# --- CORE TÍNH TOÁN THEO KHOẢNG THỜI GIAN MỞ RỘNG (TUẦN/THÁNG/NĂM) ---
+def get_financials_in_range(start_date, end_date):
+    total_in = 0
+    total_out = 0
+    
+    child_totals = {cat: 0 for cat in CHILD_CATEGORIES.keys()}
+    parent_totals = {cat: 0 for cat in PARENT_CATEGORIES.keys()}
+    income_totals = {cat: 0 for cat in INCOME_CATEGORIES.keys()}
+    
+    all_transactions = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        d_str = current_date.strftime("%Y-%m-%d")
+        file_path = os.path.join(DATA_DIR, f"data_{d_str}.json")
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                try:
+                    data = json.load(f)
+                    for e in data.get("expenses", []):
+                        amt = e.get("amount", 0)
+                        t_type = e.get("type", "out")
+                        
+                        t_detail = {
+                            "date": d_str,
+                            "time": e.get("time", ""),
+                            "desc": e.get("desc", "Không có diễn giải"),
+                            "amount": amt,
+                            "type": t_type
+                        }
+
+                        if t_type == "in":
+                            total_in += amt
+                            cat = e.get("category", "Khác (Thu)")
+                            if cat not in INCOME_CATEGORIES:
+                                cat = "Khác (Thu)"
+                            income_totals[cat] += amt
+                            t_detail["category"] = cat
+                            t_detail["icon"] = INCOME_CATEGORIES[cat]["icon"]
+                        else:
+                            total_out += amt
+                            cat = e.get("category", "Chưa phân loại")
+                            if cat not in CHILD_CATEGORIES:
+                                cat = "Chưa phân loại"
+                            
+                            child_totals[cat] += amt
+                            parent_cat = CHILD_CATEGORIES[cat]["parent"]
+                            parent_totals[parent_cat] += amt
+                            
+                            t_detail["category"] = cat
+                            t_detail["parent_category"] = parent_cat
+                            t_detail["icon"] = CHILD_CATEGORIES[cat]["icon"]
+                            
+                        all_transactions.append(t_detail)
+                except Exception:
+                    pass
+        current_date += timedelta(days=1)
+
+    child_chart_data, child_gradient = generate_chart_info(child_totals, CHILD_CATEGORIES, total_out)
+    parent_chart_data, parent_gradient = generate_chart_info(parent_totals, PARENT_CATEGORIES, total_out)
+    income_chart_data, income_gradient = generate_chart_info(income_totals, INCOME_CATEGORIES, total_in)
+    
+    all_transactions.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
+
+    return {
+        "total_in": total_in,
+        "total_out": total_out,
+        "child_chart_data": child_chart_data,
+        "child_gradient": child_gradient,
+        "parent_chart_data": parent_chart_data,
+        "parent_gradient": parent_gradient,
+        "income_chart_data": income_chart_data,
+        "income_gradient": income_gradient,
+        "transactions": all_transactions
+    }
+
+def get_all_expense_data(year, month):
+    today = datetime.today()
+    
+    # KỲ XEM TÌNH HÌNH (THÁNG CHỈ ĐỊNH)
+    _, num_days = calendar.monthrange(year, month)
+    month_start = datetime(year, month, 1)
+    month_end = datetime(year, month, num_days)
+    exp_monthly = get_financials_in_range(month_start, month_end)
+
+    # DỮ LIỆU BIẾN ĐỘNG THU CHI (SO SÁNH TUẦN / THÁNG / NĂM HIỆN TẠI)
+    # 1. Tháng
+    curr_month_start = datetime(today.year, today.month, 1)
+    _, curr_month_days = calendar.monthrange(today.year, today.month)
+    curr_month_end = datetime(today.year, today.month, curr_month_days)
+
+    prev_m_date = curr_month_start - timedelta(days=1)
+    prev_month_start = datetime(prev_m_date.year, prev_m_date.month, 1)
+    _, prev_month_days = calendar.monthrange(prev_m_date.year, prev_m_date.month)
+    prev_month_end = datetime(prev_m_date.year, prev_m_date.month, prev_month_days)
+
+    # 2. Tuần
+    curr_week_start = today - timedelta(days=today.weekday())
+    curr_week_end = curr_week_start + timedelta(days=6)
+    prev_week_start = curr_week_start - timedelta(days=7)
+    prev_week_end = prev_week_start + timedelta(days=6)
+
+    # 3. Năm
+    curr_year_start = datetime(today.year, 1, 1)
+    curr_year_end = datetime(today.year, 12, 31)
+    prev_year_start = datetime(today.year - 1, 1, 1)
+    prev_year_end = datetime(today.year - 1, 12, 31)
+
+    return {
+        "exp_monthly": exp_monthly,
+        "bdData": {
+            "month": {
+                "curr": get_financials_in_range(curr_month_start, curr_month_end),
+                "prev": get_financials_in_range(prev_month_start, prev_month_end)
+            },
+            "week": {
+                "curr": get_financials_in_range(curr_week_start, curr_week_end),
+                "prev": get_financials_in_range(prev_week_start, prev_week_end)
+            },
+            "year": {
+                "curr": get_financials_in_range(curr_year_start, curr_year_end),
+                "prev": get_financials_in_range(prev_year_start, prev_year_end)
+            }
+        }
+    }
+
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Binh Ky Luat</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background: #f8f9fa; display: flex; flex-direction: column; height: 100vh; }
+        
+        .app-header { background: white; padding: 15px 20px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;}
+        .header-title { font-size: 18px; font-weight: bold; color: #1e293b; display: flex; align-items: center; gap: 10px; }
+        .main { flex: 1; padding: 15px; overflow-y: auto; padding-bottom: 80px; }
+        
+        .summary-header { display: flex; gap: 10px; margin-bottom: 15px; }
+        .summary-box { flex: 1; background: white; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; }
+        .summary-label { font-size: 13px; color: #64748b; margin-bottom: 8px; display: flex; align-items: center; gap: 5px; }
+        .summary-amount { font-size: 18px; font-weight: bold; color: #1e293b; }
+        
+        .card { background: white; border-radius: 16px; padding: 20px 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); margin-bottom: 15px; }
+        .card-title { margin-top: 0; margin-bottom: 20px; color: #1e293b; font-size: 16px; font-weight: bold; }
+        
+        /* DONUT CHART */
+        .chart-container { display: flex; align-items: center; justify-content: center; margin: 20px 0 25px 0; }
+        .donut-wrapper { position: relative; width: 180px; height: 180px; display: flex; justify-content: center; align-items: center; }
+        .donut-chart { width: 100%; height: 100%; border-radius: 50%; transition: background 0.3s ease; }
+        .donut-hole { width: 100px; height: 100px; background: white; border-radius: 50%; position: absolute; }
+        
+        /* TABS DANH MỤC */
+        .list-header { display: flex; border-bottom: 1px solid #e2e8f0; margin-bottom: 10px; }
+        .list-header-tab { flex: 1; text-align: center; padding: 12px 0; font-size: 14px; color: #64748b; margin-bottom: -1px; cursor: pointer; transition: 0.2s;}
+        
+        .tab-out.active { color: #ef4444; border-bottom: 2px solid #ef4444; font-weight: 600; }
+        .tab-in.active { color: #22c55e; border-bottom: 2px solid #22c55e; font-weight: 600; }
+        .sub-tab.active { color: #d82d8b; border-bottom: 2px solid #d82d8b; font-weight: 600; }
+        
+        .cat-item { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid #f1f5f9; transition: background 0.2s; }
+        .cat-item:active { background: #f8f9fa; }
+        .cat-item:last-child { border-bottom: none; }
+        .cat-name { font-size: 14px; font-weight: 500; color: #1e293b; display: flex; align-items: center; gap: 10px; }
+        .cat-amount { font-size: 14px; font-weight: bold; color: #1e293b; display: flex; align-items: center; gap: 5px;}
+
+        /* BOTTOM NAV */
+        .bottom-nav { position: fixed; bottom: 0; left: 0; width: 100%; background: white; display: flex; padding: 12px 0 20px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); z-index: 50; }
+        .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; color: #94a3b8; text-decoration: none; font-size: 11px; font-weight: bold; }
+        .nav-item.active { color: #d82d8b; }
+        .nav-icon { font-size: 24px; margin-bottom: 2px; }
+
+        /* MODAL VÀ FORM */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); z-index: 100; justify-content: center; align-items: flex-end; }
+        .modal-box { background: white; width: 100%; padding: 20px; border-radius: 20px 20px 0 0; animation: slideUp 0.3s ease-out; position: relative; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        
+        .type-btn { flex: 1; padding: 12px; text-align: center; border-radius: 8px; border: 1px solid #cbd5e1; color: #64748b; font-weight: bold; font-size: 14px; cursor: pointer; transition: 0.2s; }
+        .type-btn.active-out { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
+        .type-btn.active-in { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
+        .type-btn.active-diff { border-color: #3b82f6; color: #3b82f6; background: #eff6ff; }
+
+        .form-input, .form-select { width: 100%; padding: 14px; margin-bottom: 15px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 14px; background: #f8f9fa; outline: none; }
+        .form-input:focus, .form-select:focus { border-color: #d82d8b; background: white; }
+        
+        .btn-submit { width: 100%; padding: 14px; background: #d82d8b; color: white; border: none; border-radius: 12px; font-weight: bold; font-size: 15px; cursor: pointer; }
+        .btn-add-main { width: 100%; padding: 16px; background: linear-gradient(to right, #d82d8b, #f472b6); color: white; border: none; border-radius: 14px; font-weight: bold; font-size: 15px; cursor: pointer; box-shadow: 0 4px 12px rgba(216,45,139,0.3); display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 20px; }
+        
+        .close-modal { position: absolute; top: 15px; right: 20px; font-size: 24px; color: #94a3b8; cursor: pointer; font-weight: bold; z-index: 10; }
+        
+        /* CÁC CLASS CHO NHIỆM VỤ VÀ DOMINO */
+        .sub-nav { display: flex; gap: 20px; margin-bottom: 15px; padding-bottom: 5px; }
+        .sub-link { text-decoration: none; color: #64748b; font-weight: bold; font-size: 14px; padding-bottom: 8px;}
+        .domino-container { display: flex; overflow-x: auto; padding: 10px 0; margin-bottom: 5px;}
+        .domino-container::-webkit-scrollbar { display: none; } 
+        .domino-btn { flex: 0 0 60px; height: 50px; background: white; border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; margin-right: -15px; border-radius: 8px; z-index: 1; cursor: pointer; text-decoration: none; color: #475569;}
+        .domino-btn.active { z-index: 10; background: #d82d8b; color: white; border-color: #d82d8b; }
+        .domino-btn-year { flex: 0 0 70px; }
+        
+        .task-list { display: none; }
+        .task-list.active { display: block; }
+        .task-card { background: white; padding: 14px; margin-bottom: 10px; border-radius: 12px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        .btn-done, .history-done { background: transparent; border: none; padding: 5px; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+        .btn-done { cursor: pointer; }
+        .btn-yes { flex: 1; padding: 12px; background: #d82d8b; color: white; border: none; border-radius: 10px; font-weight: bold; font-size: 15px; cursor: pointer; }
+        .btn-no { flex: 1; padding: 12px; background: white; color: #64748b; border: 1px solid #cbd5e1; border-radius: 10px; font-weight: bold; font-size: 15px; cursor: pointer; }
+
+        /* MOMO STYLE SWITCHES */
+        .momo-time-tabs { display: flex; background: #f1f5f9; padding: 4px; border-radius: 10px; margin-bottom: 15px; }
+        .momo-time-tab { flex: 1; text-align: center; padding: 8px 0; font-size: 13px; color: #64748b; cursor: pointer; border-radius: 8px; font-weight: 500; transition: 0.2s;}
+        .momo-time-tab.active { background: white; color: #d82d8b; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+
+        .chart-toggle-btn { padding: 6px 14px; border: 1px solid #cbd5e1; background: white; font-size: 12px; color: #64748b; font-weight: bold; border-radius: 20px; cursor: pointer; transition: 0.2s; }
+        .chart-toggle-btn.active { background: #1e293b; color: white; border-color: #1e293b; }
+    </style>
+</head>
+<body>
+
+    {% if active == 'exp' %}
+        <div class="app-header">
+            <div class="header-title">Quản lý chi tiêu</div>
+            <div style="font-size: 20px; color: #64748b; display:flex; gap:15px;">
+                <span>⭐</span><span>🎧</span><span>🏠</span>
+            </div>
+        </div>
+
+        <div class="main">
+            <!-- HAI MỤC CHUYỂN ĐỔI CHẾ ĐỘ XEM ĐƯỢC ĐẶT LÊN TRÊN CÙNG -->
+            <div class="domino-container" style="margin-bottom: 15px; padding: 0;">
+                <div class="domino-btn {% if init_sec != 'bien-dong' %}active{% endif %}" style="flex: 1; margin-right: 5px; height: 42px; justify-content: center; border-radius: 12px; z-index: 1;" id="btn-sec-tinh-hinh" onclick="switchSection('tinh-hinh')">Tình hình thu chi</div>
+                <div class="domino-btn {% if init_sec == 'bien-dong' %}active{% endif %}" style="flex: 1; margin-left: 5px; margin-right: 0; height: 42px; justify-content: center; border-radius: 12px; z-index: 1;" id="btn-sec-bien-dong" onclick="switchSection('bien-dong')">Biến động thu chi</div>
+            </div>
+
+            <!-- KHỐI 1: TÌNH HÌNH THU CHI -->
+            <div id="sec-tinh-hinh" style="{% if init_sec == 'bien-dong' %}display: none;{% endif %}">
+                
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; background: white; padding: 12px 18px; border-radius: 14px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.01);">
+                    <a href="/expenses?year={{ prev_year }}&month={{ prev_month }}&tab={{ init_tab }}&sec=tinh-hinh" style="text-decoration: none; font-size: 18px; color: #d82d8b; font-weight: bold; padding: 0 10px;">◀</a>
+                    <div style="font-size: 15px; font-weight: bold; color: #1e293b; display: flex; align-items: center; gap: 5px;">📅 Tháng {{ "%02d"|format(selected_month) }} / {{ selected_year }}</div>
+                    <a href="/expenses?year={{ next_year }}&month={{ next_month }}&tab={{ init_tab }}&sec=tinh-hinh" style="text-decoration: none; font-size: 18px; color: #d82d8b; font-weight: bold; padding: 0 10px;">▶</a>
+                </div>
+
+                <div class="summary-header">
+                    <div class="summary-box">
+                        <div class="summary-label">
+                            <span style="color:#ef4444; border: 1px solid #fecaca; border-radius:50%; width:16px; height:16px; display:flex; align-items:center; justify-content:center; font-size:10px;">↗</span> 
+                            Tổng Chi <span style="color:#ef4444; font-size:10px; margin-left:5px;">↓</span>
+                        </div>
+                        <div class="summary-amount" id="summary-total-out">{{ "{:,.0f}".format(exp_monthly.total_out) }}đ</div>
+                    </div>
+                    
+                    <div class="summary-box">
+                        <div class="summary-label">
+                            <span style="color:#22c55e; border: 1px solid #bbf7d0; border-radius:50%; width:16px; height:16px; display:flex; align-items:center; justify-content:center; font-size:10px;">↙</span> 
+                            Tổng Thu <span style="color:#22c55e; font-size:10px; margin-left:5px;">↑</span>
+                        </div>
+                        <div class="summary-amount" id="summary-total-in">{{ "{:,.0f}".format(exp_monthly.total_in) }}đ</div>
+                    </div>
+                </div>
+
+                <button class="btn-add-main" onclick="openForm()">
+                    <span style="font-size: 20px;">+</span> Nhập giao dịch
+                </button>
+
+                <div class="card">
+                    <div class="list-header" style="margin-bottom: 15px;">
+                        <div class="list-header-tab tab-out active" id="tab-main-out" onclick="setMainTab('out')">📉 Tiền Chi</div>
+                        <div class="list-header-tab tab-in" id="tab-main-in" onclick="setMainTab('in')">📈 Tiền Thu</div>
+                    </div>
+
+                    <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 15px;">
+                        <button id="btn-chart-donut" class="chart-toggle-btn active" onclick="switchChartType('donut')">🍩 Biểu đồ tròn</button>
+                        <button id="btn-chart-bar" class="chart-toggle-btn" onclick="switchChartType('bar')">📊 Biểu đồ cột</button>
+                    </div>
+
+                    <div class="chart-container" id="donut-chart-view">
+                        <div class="donut-wrapper">
+                            <div class="donut-chart" id="donutChart"></div>
+                            <div class="donut-hole"></div>
+                        </div>
+                    </div>
+
+                    <div id="bar-chart-view" style="display: none; padding: 10px 0 25px 0;">
+                        <div id="bar-chart-columns" style="display: flex; align-items: flex-end; justify-content: space-around; height: 160px; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px;"></div>
+                    </div>
+
+                    <div class="list-header" id="sub-tabs-out">
+                        <div class="list-header-tab sub-tab active" id="tab-sub-child" onclick="setSubTab('child')">Danh mục con</div>
+                        <div class="list-header-tab sub-tab" id="tab-sub-parent" onclick="setSubTab('parent')">Danh mục cha</div>
+                    </div>
+                    
+                    <div id="category-list" style="margin-top: 15px;"></div>
+                </div>
+            </div>
+
+            <!-- KHỐI 2: BIẾN ĐỘNG THU CHI -->
+            <div id="sec-bien-dong" style="{% if init_sec != 'bien-dong' %}display: none;{% endif %}">
+                <div class="momo-time-tabs">
+                    <div class="momo-time-tab" id="momo-time-week" onclick="setMomoTime('week')">Theo tuần</div>
+                    <div class="momo-time-tab active" id="momo-time-month" onclick="setMomoTime('month')">Theo tháng</div>
+                    <div class="momo-time-tab" id="momo-time-year" onclick="setMomoTime('year')">Theo năm</div>
+                </div>
+
+                <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+                    <div id="momo-tab-in" class="type-btn" onclick="setMomoTab('in')">Thu nhập</div>
+                    <div id="momo-tab-out" class="type-btn active-out" onclick="setMomoTab('out')">Chi tiêu</div>
+                    <div id="momo-tab-diff" class="type-btn" onclick="setMomoTab('diff')">Chênh lệch</div>
+                </div>
+
+                <div class="card" style="text-align: center; padding: 20px 15px;">
+                    <div id="momo-summary-title" style="font-size: 13px; color: #64748b; font-weight: 500;">Tổng chi tháng này</div>
+                    <div id="momo-summary-amount" style="font-size: 26px; font-weight: 800; color: #1e293b; margin: 8px 0 12px 0;">0đ</div>
+                    <div id="momo-summary-insight" style="display: inline-block; font-size: 12px; padding: 6px 14px; border-radius: 20px; font-weight: 600;"></div>
+                    
+                    <div style="margin-top: 25px; font-size: 13px; font-weight: bold; color: #1e293b; text-align: left; display: flex; justify-content: space-between; align-items: center;">
+                        <span>Biến động</span>
+                        <span style="font-size: 11px; color:#94a3b8; font-weight: normal;" id="momo-ky-hieu-so-sanh">So với tháng trước 🟢</span>
+                    </div>
+                    
+                    <div style="display: flex; align-items: flex-end; justify-content: center; gap: 50px; height: 140px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-top: 15px;">
+                        <div style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                            <div id="momo-bar-prev" style="width: 32px; height: 0px; background: #cbd5e1; border-radius: 6px 6px 0 0; transition: height 0.4s ease;"></div>
+                            <span style="font-size: 11px; color: #64748b; margin-top: 8px;" id="momo-label-prev">Kỳ trước</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                            <div id="momo-bar-curr" style="width: 32px; height: 0px; background: #3b82f6; border-radius: 6px 6px 0 0; transition: height 0.4s ease;"></div>
+                            <span style="font-size: 11px; color: #1e293b; font-weight: bold; margin-top: 8px;" id="momo-label-curr">Kỳ này</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="list-header" id="momo-sub-tabs" style="margin-bottom: 5px;">
+                        <div class="list-header-tab sub-tab active" id="momo-sub-child" onclick="setMomoSubTab('child')">Danh mục con</div>
+                        <div class="list-header-tab sub-tab" id="momo-sub-parent" onclick="setMomoSubTab('parent')">Danh mục cha</div>
+                    </div>
+                    <div id="momo-comparison-list"></div>
+                </div>
+            </div>
+        </div>
+
+    {% else %}
+        <!-- PHẦN GIAO DIỆN KỶ LUẬT -->
+        <div class="app-header">
+            <div class="header-title">Kỷ Luật Bản Thân</div>
+        </div>
+
+        <div class="main">
+            {% if active == 'tasks' %}
+                <div class="sub-nav">
+                    <a href="/" class="sub-link" style="color:#d82d8b; border-bottom: 2px solid #d82d8b;">Tuần này</a>
+                    <a href="/history_tasks" class="sub-link">Lịch sử nhiệm vụ</a>
+                </div>
+                <div class="domino-container" style="margin-bottom: 20px;">
+                    {% for d in week_data %}
+                    <div class="domino-btn {% if selected_date == d.date %}active{% endif %}" onclick="showDay('{{ d.date }}', this)">{{ d.name }}</div>
+                    {% endfor %}
+                </div>
+                {% for d in week_data %}
+                <div id="day-{{ d.date }}" class="task-list {% if selected_date == d.date %}active{% endif %}">
+                    <h3 style="color:#475569; font-size: 14px;">{{ d.name }} ({{ d.date }})</h3>
+                    {% for i in range(tasks|length) %}
+                    <div class="task-card">
+                        <span style="font-size:14px; font-weight: 500;">{{ tasks[i] }}</span>
+                        {% if d.data.status[i] %} 
+                            <button class="btn-done" onclick="openTaskConfirm('{{d.date}}', {{i}}, true, this)">✅</button> 
+                        {% else %} 
+                            <button class="btn-done" onclick="openTaskConfirm('{{d.date}}', {{i}}, false, this)">⬜</button> 
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+
+            {% elif active == 'history_tasks' %}
+                <div class="sub-nav">
+                    <a href="/" class="sub-link">Tuần này</a>
+                    <a href="/history_tasks" class="sub-link" style="color:#d82d8b; border-bottom: 2px solid #d82d8b;">Lịch sử nhiệm vụ</a>
+                </div>
+                <div class="domino-container">
+                    {% for y in years %}
+                    <a href="/history_tasks?year={{ y }}&month={{ selected_month }}" class="domino-btn domino-btn-year {% if y == selected_year %}active{% endif %}">Năm {{ y }}</a>
+                    {% endfor %}
+                </div>
+                <div class="domino-container">
+                    {% for m in months %}
+                    <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
+                    {% endfor %}
+                </div>
+                <div class="domino-container" style="margin-bottom: 10px;">
+                    {% for d in month_data %}
+                    <div class="domino-btn {% if selected_date == d.date or (not selected_date and loop.first) %}active{% endif %}" onclick="showDay('{{ d.date }}', this)">{{ loop.index }}</div>
+                    {% endfor %}
+                </div>
+                {% for d in month_data %}
+                <div id="day-{{ d.date }}" class="task-list {% if selected_date == d.date or (not selected_date and loop.first) %}active{% endif %}">
+                    <h3 style="margin-top: 5px; color:#475569; font-size: 14px; border-bottom: 2px solid #e2e8f0; padding-bottom: 5px;">Ngày {{ d.day_num }}/{{ selected_month }}/{{ selected_year }}</h3>
+                    {% for i in range(tasks|length) %}
+                    <div class="task-card">
+                        <span style="font-size:14px; color: {% if d.data.status[i] %}#0f172a{% else %}#94a3b8{% endif %};">{{ tasks[i] }}</span>
+                        {% if d.data.status[i] %} <span class="history-done">✅</span> {% else %} <span class="history-done">⬜</span> {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+    {% endif %}
+
+    <div class="bottom-nav">
+        <a href="/expenses" class="nav-item {% if active == 'exp' %}active{% endif %}">
+            <div class="nav-icon">📊</div>
+            Tổng quan
+        </a>
+        <a href="/" class="nav-item {% if active in ['tasks', 'history_tasks'] %}active{% endif %}">
+            <div class="nav-icon">☑️</div>
+            Nhiệm vụ
+        </a>
+    </div>
+
+    <!-- MODAL THÊM GIAO DỊCH -->
+    <div id="addModal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="close-modal" onclick="closeForm()">×</div>
+            <h3 style="margin-top:0; margin-bottom: 20px; color: #1e293b; text-align: center;">Thêm Giao Dịch</h3>
+            
+            <!-- ĐÃ SỬA: Bỏ action, thêm ID form để xử lý gửi ngầm qua JS -->
+            <form id="addTransactionForm">
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <div id="btn-type-out" class="type-btn active-out" onclick="setType('out')">🔴 Chi tiêu</div>
+                    <div id="btn-type-in" class="type-btn" onclick="setType('in')">🟢 Thu nhập</div>
+                </div>
+                <input type="hidden" name="type" id="formType" value="out">
+                
+                <div id="categoryGroupOut">
+                    <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Danh mục Chi</label>
+                    <select name="category_out" class="form-select">
+                        <option value="Ăn uống">🍲 Ăn uống</option>
+                        <option value="Hóa đơn">🧾 Hóa đơn</option>
+                        <option value="Mua sắm">🛒 Mua sắm</option>
+                        <option value="Di chuyển">🚗 Di chuyển</option>
+                        <option value="Giải trí">🎬 Giải trí</option>
+                        <option value="Chưa phân loại">📦 Chưa phân loại</option>
+                    </select>
+                </div>
+
+                <div id="categoryGroupIn" style="display: none;">
+                    <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Nguồn Thu</label>
+                    <select name="category_in" class="form-select">
+                        <option value="Tiền lương">💵 Tiền lương</option>
+                        <option value="Tiền thưởng">🎁 Tiền thưởng</option>
+                        <option value="Đầu tư/Lãi">📈 Đầu tư/Lãi</option>
+                        <option value="Khác (Thu)">💰 Khác</option>
+                    </select>
+                </div>
+
+                <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Diễn giải chi tiết</label>
+                <input name="desc" class="form-input" placeholder="Ví dụ: Ăn trưa bún bò, Lương tháng 9..." required>
+                
+                <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Số tiền (VNĐ)</label>
+                <input name="amount" type="number" class="form-input" placeholder="0" style="font-size: 18px; font-weight: bold; color:#1e293b;" required>
+                
+                <button type="submit" class="btn-submit">LƯU GIAO DỊCH</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL XÁC NHẬN NHIỆM VỤ -->
+    <div id="taskModal" class="modal-overlay" style="align-items: center;">
+        <div class="modal-box" style="border-radius: 20px; padding: 25px; text-align: center; margin: 0 30px; width: auto; animation: none;">
+            <div style="font-size: 40px; margin-bottom: 10px;">🤔</div>
+            <h3 id="taskConfirmMsg" style="margin-top:0; color: #1e293b; font-size: 16px;">Bạn đã chắc chắn hoàn thành chưa?</h3>
+            <div style="display: flex; gap: 10px; margin-top: 25px;">
+                <button class="btn-no" onclick="closeTaskConfirm()">Chưa</button>
+                <button class="btn-yes" id="btnConfirmTask">Rồi</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        {% if active == 'exp' %}
+        
+        // CÁC BIẾN CÓ THỂ ĐƯỢC CẬP NHẬT LẠI KHI THÊM GIAO DỊCH
+        let childData = {{ exp_monthly.child_chart_data | tojson | safe }};
+        let parentData = {{ exp_monthly.parent_chart_data | tojson | safe }};
+        let incomeData = {{ exp_monthly.income_chart_data | tojson | safe }};
+        let childGradient = "{{ exp_monthly.child_gradient }}";
+        let parentGradient = "{{ exp_monthly.parent_gradient }}";
+        let incomeGradient = "{{ exp_monthly.income_gradient }}";
+        let allTransactions = {{ exp_monthly.transactions | tojson | safe }};
+        
+        // BỘ DỮ LIỆU ĐẦY ĐỦ CHO TUẦN / THÁNG / NĂM
+        let bdData = {{ bdData | tojson | safe }};
+
+        // CÁC BIẾN TRẠNG THÁI
+        let currentMainTab = '{{ init_tab }}' || 'out'; 
+        let currentSubTab = 'child'; 
+        let currentSection = '{{ init_sec }}' || 'tinh-hinh';
+        let currentChartType = 'donut'; 
+        
+        let momoActiveTab = 'out'; 
+        let momoSubTab = 'child';
+        let momoTime = 'month';
+        
+        // HÀM LẤY LẠI DATA SAU KHI LƯU GIAO DỊCH (KHÔNG TẢI LẠI TRANG)
+        function refreshExpenseData() {
+            const year = {{ selected_year }};
+            const month = {{ selected_month }};
+            
+            fetch(`/api/expenses_data?year=${year}&month=${month}`)
+                .then(res => res.json())
+                .then(data => {
+                    // Ghi đè lại các biến dữ liệu
+                    childData = data.exp_monthly.child_chart_data;
+                    parentData = data.exp_monthly.parent_chart_data;
+                    incomeData = data.exp_monthly.income_chart_data;
+                    childGradient = data.exp_monthly.child_gradient;
+                    parentGradient = data.exp_monthly.parent_gradient;
+                    incomeGradient = data.exp_monthly.income_gradient;
+                    allTransactions = data.exp_monthly.transactions;
+                    bdData = data.bdData;
+                    
+                    // Cập nhật thẻ số tiền mặt
+                    document.getElementById('summary-total-out').innerText = data.exp_monthly.total_out.toLocaleString('en-US') + 'đ';
+                    document.getElementById('summary-total-in').innerText = data.exp_monthly.total_in.toLocaleString('en-US') + 'đ';
+                    
+                    // Vẽ lại giao diện ngay tức thì
+                    renderView();
+                    renderMomoSection();
+                });
+        }
+        
+        // XỬ LÝ SỰ KIỆN GỬI GIAO DỊCH NGẦM
+        document.getElementById('addTransactionForm').addEventListener('submit', function(e) {
+            e.preventDefault(); 
+            const formData = new FormData(this);
+            const btnSubmit = this.querySelector('.btn-submit');
+            const originalText = btnSubmit.innerText;
+            btnSubmit.innerText = 'ĐANG LƯU...';
+
+            fetch('/add', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    closeForm();
+                    this.reset();
+                    // Load lại dữ liệu và update giao diện!
+                    refreshExpenseData();
+                }
+            })
+            .catch(err => {
+                alert("Lỗi khi thêm giao dịch");
+            })
+            .finally(() => {
+                btnSubmit.innerText = originalText;
+            });
+        });
+
+        function switchSection(sec) {
+            currentSection = sec;
+            document.getElementById('btn-sec-tinh-hinh').classList.remove('active');
+            document.getElementById('btn-sec-bien-dong').classList.remove('active');
+            document.getElementById('btn-sec-' + sec).classList.add('active');
+            
+            if (sec === 'tinh-hinh') {
+                document.getElementById('sec-tinh-hinh').style.display = 'block';
+                document.getElementById('sec-bien-dong').style.display = 'none';
+            } else {
+                document.getElementById('sec-tinh-hinh').style.display = 'none';
+                document.getElementById('sec-bien-dong').style.display = 'block';
+                renderMomoSection();
+            }
+        }
+
+        function switchChartType(type) {
+            currentChartType = type;
+            document.getElementById('btn-chart-donut').classList.remove('active');
+            document.getElementById('btn-chart-bar').classList.remove('active');
+            
+            if(type === 'donut') {
+                document.getElementById('btn-chart-donut').classList.add('active');
+                document.getElementById('donut-chart-view').style.display = 'flex';
+                document.getElementById('bar-chart-view').style.display = 'none';
+            } else {
+                document.getElementById('btn-chart-bar').classList.add('active');
+                document.getElementById('donut-chart-view').style.display = 'none';
+                document.getElementById('bar-chart-view').style.display = 'block';
+            }
+            renderView();
+        }
+
+        function setMainTab(tab) {
+            currentMainTab = tab;
+            document.getElementById('tab-main-out').classList.remove('active');
+            document.getElementById('tab-main-in').classList.remove('active');
+            document.getElementById('tab-main-' + tab).classList.add('active');
+
+            if(tab === 'out') {
+                document.getElementById('sub-tabs-out').style.display = 'flex';
+            } else {
+                document.getElementById('sub-tabs-out').style.display = 'none';
+            }
+            renderView();
+        }
+
+        function setSubTab(tab) {
+            currentSubTab = tab;
+            document.getElementById('tab-sub-child').classList.remove('active');
+            document.getElementById('tab-sub-parent').classList.remove('active');
+            document.getElementById('tab-sub-' + tab).classList.add('active');
+            renderView();
+        }
+
+        function renderView() {
+            let data, gradient;
+            if (currentMainTab === 'out') {
+                if (currentSubTab === 'child') { data = childData; gradient = childGradient; } 
+                else { data = parentData; gradient = parentGradient; }
+            } else {
+                data = incomeData; gradient = incomeGradient;
+            }
+
+            document.getElementById('donutChart').style.background = `conic-gradient(${gradient})`;
+
+            const barColumnsContainer = document.getElementById('bar-chart-columns');
+            barColumnsContainer.innerHTML = '';
+            if (data.length === 0) {
+                barColumnsContainer.innerHTML = '<span style="color: #94a3b8; font-size: 13px; margin-bottom: 50px;">Chưa có dữ liệu</span>';
+            } else {
+                data.forEach(item => {
+                    const heightPx = item.pct > 0 ? (item.pct * 1.1) + 12 : 12; 
+                    barColumnsContainer.innerHTML += `
+                        <div style="display: flex; flex-direction: column; align-items: center; width: 50px;">
+                            <span style="font-size: 10px; font-weight: bold; color: #64748b; margin-bottom: 4px;">${item.pct}%</span>
+                            <div style="width: 22px; height: ${heightPx}px; background: ${item.color}; border-radius: 4px 4px 0 0;"></div>
+                            <span style="font-size: 15px; margin-top: 5px;" title="${item.name}">${item.icon}</span>
+                        </div>
+                    `;
+                });
+            }
+
+            const listContainer = document.getElementById('category-list');
+            listContainer.innerHTML = '';
+            
+            if (data.length === 0) {
+                listContainer.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px; font-size: 14px;">Chưa có dữ liệu</div>';
+                return;
+            }
+
+            data.forEach((item, index) => {
+                const iconBg = item.color + "20"; 
+                let catTxns = [];
+                if (currentMainTab === 'in') {
+                    catTxns = allTransactions.filter(t => t.type === 'in' && t.category === item.name);
+                } else {
+                    if (currentSubTab === 'child') { catTxns = allTransactions.filter(t => t.type === 'out' && t.category === item.name); } 
+                    else { catTxns = allTransactions.filter(t => t.type === 'out' && t.parent_category === item.name); }
+                }
+
+                let detailsHtml = '';
+                catTxns.forEach(t => {
+                    let timeStr = t.time ? t.time + ' - ' : '';
+                    let dateStr = t.date.substring(8, 10) + '/' + t.date.substring(5, 7);
+                    let sign = t.type === 'in' ? '+' : '-';
+                    let amountColor = t.type === 'in' ? '#22c55e' : '#ef4444';
+
+                    detailsHtml += `
+                        <div style="display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px dashed #e2e8f0;">
+                            <div style="flex: 1; padding-right: 10px;">
+                                <div style="font-size: 14px; font-weight: 500; color: #1e293b; margin-bottom: 4px;">${t.desc}</div>
+                                <div style="font-size: 12px; color: #94a3b8;">🕒 ${timeStr}${dateStr}</div>
+                            </div>
+                            <div style="font-weight: bold; color: ${amountColor}; font-size: 14px; display: flex; align-items: center;">
+                                ${sign} ${t.amount.toLocaleString('en-US')}đ
+                            </div>
+                        </div>
+                    `;
+                });
+
+                const uniqueId = `cat-detail-${index}`;
+                listContainer.innerHTML += `
+                    <div style="cursor: pointer; margin-bottom: 5px;" onclick="toggleDetails('${uniqueId}')">
+                        <div class="cat-item">
+                            <div class="cat-name">
+                                <span style="font-size: 20px; background: ${iconBg}; padding: 8px; border-radius: 10px;">${item.icon}</span>
+                                ${item.name}
+                            </div>
+                            <div class="cat-amount">
+                                ${item.amount.toLocaleString('en-US')}đ 
+                                <span style="color: #94a3b8; font-weight: normal; font-size: 18px; margin-left: 5px;">▾</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="${uniqueId}" style="display: none; background: #f8f9fa; padding: 5px 15px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e2e8f0;">
+                        ${detailsHtml}
+                    </div>
+                `;
+            });
+        }
+
+        function toggleDetails(id) {
+            const el = document.getElementById(id);
+            el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+        }
+
+        function setMomoTime(time) {
+            momoTime = time;
+            document.getElementById('momo-time-week').classList.remove('active');
+            document.getElementById('momo-time-month').classList.remove('active');
+            document.getElementById('momo-time-year').classList.remove('active');
+            document.getElementById('momo-time-' + time).classList.add('active');
+            renderMomoSection();
+        }
+
+        function setMomoTab(tab) {
+            momoActiveTab = tab;
+            document.getElementById('momo-tab-in').classList.remove('active-in');
+            document.getElementById('momo-tab-out').classList.remove('active-out');
+            document.getElementById('momo-tab-diff').classList.remove('active-diff');
+            
+            if(tab === 'in') document.getElementById('momo-tab-in').classList.add('active-in');
+            if(tab === 'out') document.getElementById('momo-tab-out').classList.add('active-out');
+            if(tab === 'diff') document.getElementById('momo-tab-diff').classList.add('active-diff');
+            
+            if (tab === 'out') {
+                document.getElementById('momo-sub-tabs').style.display = 'flex';
+            } else {
+                document.getElementById('momo-sub-tabs').style.display = 'none';
+            }
+            renderMomoSection();
+        }
+
+        function setMomoSubTab(tab) {
+            momoSubTab = tab;
+            document.getElementById('momo-sub-child').classList.remove('active');
+            document.getElementById('momo-sub-parent').classList.remove('active');
+            document.getElementById('momo-sub-' + tab).classList.add('active');
+            renderMomoSection();
+        }
+
+        function renderMomoSection() {
+            // LẤY RA DATA THEO THỜI GIAN LỰA CHỌN (TUẦN/THÁNG/NĂM)
+            const timeData = bdData[momoTime];
+            const currObj = timeData.curr;
+            const prevObj = timeData.prev;
+
+            let timeText = momoTime === 'week' ? 'tuần' : (momoTime === 'year' ? 'năm' : 'tháng');
+            let TimeLabelText = momoTime === 'week' ? 'Tuần' : (momoTime === 'year' ? 'Năm' : 'Tháng');
+            
+            document.getElementById('momo-ky-hieu-so-sanh').innerText = `So với ${timeText} trước 🟢`;
+            document.getElementById('momo-label-prev').innerText = `${TimeLabelText} trước`;
+            document.getElementById('momo-label-curr').innerText = `${TimeLabelText} này`;
+
+            let title = "", amountStr = "", insightHtml = "";
+            let currVal = 0, prevVal = 0;
+
+            if (momoActiveTab === 'out') {
+                title = `Tổng chi ${timeText} này`;
+                currVal = currObj.total_out;
+                prevVal = prevObj.total_out;
+                amountStr = currVal.toLocaleString('en-US') + "đ";
+                let diff = currVal - prevVal;
+                if(diff >= 0) {
+                    insightHtml = `<span style="color:#ef4444">↗ Tăng ${diff.toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#fef2f2";
+                } else {
+                    insightHtml = `<span style="color:#22c55e">↘ Giảm ${Math.abs(diff).toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#f0fdf4";
+                }
+            } else if (momoActiveTab === 'in') {
+                title = `Tổng thu nhập ${timeText} này`;
+                currVal = currObj.total_in;
+                prevVal = prevObj.total_in;
+                amountStr = currVal.toLocaleString('en-US') + "đ";
+                let diff = currVal - prevVal;
+                if(diff >= 0) {
+                    insightHtml = `<span style="color:#22c55e">↗ Tăng ${diff.toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#f0fdf4";
+                } else {
+                    insightHtml = `<span style="color:#ef4444">↘ Giảm ${Math.abs(diff).toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#fef2f2";
+                }
+            } else {
+                title = `Chênh lệch thu chi ${timeText} này`;
+                currVal = currObj.total_in - currObj.total_out;
+                prevVal = prevObj.total_in - prevObj.total_out;
+                amountStr = (currVal >= 0 ? "+" : "") + currVal.toLocaleString('en-US') + "đ";
+                let diff = currVal - prevVal;
+                if(diff >= 0) {
+                    insightHtml = `<span style="color:#22c55e">↗ Cải thiện ${diff.toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#f0fdf4";
+                } else {
+                    insightHtml = `<span style="color:#ef4444">↘ Thâm hụt ${Math.abs(diff).toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
+                    document.getElementById('momo-summary-insight').style.background = "#fef2f2";
+                }
+            }
+
+            document.getElementById('momo-summary-title').innerText = title;
+            document.getElementById('momo-summary-amount').innerText = amountStr;
+            document.getElementById('momo-summary-insight').innerHTML = insightHtml;
+
+            let maxBarVal = Math.max(Math.abs(currVal), Math.abs(prevVal));
+            let hPrev = 0, hCurr = 0;
+            if (maxBarVal > 0) {
+                let p = (Math.abs(prevVal) / maxBarVal) * 110;
+                let c = (Math.abs(currVal) / maxBarVal) * 110;
+                hPrev = (p < 10 && Math.abs(prevVal) > 0) ? 10 : p;
+                hCurr = (c < 10 && Math.abs(currVal) > 0) ? 10 : c;
+            }
+            document.getElementById('momo-bar-prev').style.height = hPrev + "px";
+            document.getElementById('momo-bar-curr').style.height = hCurr + "px";
+            document.getElementById('momo-bar-curr').style.background = (momoActiveTab === 'out') ? '#ef4444' : (momoActiveTab === 'in' ? '#22c55e' : '#3b82f6');
+
+            const momoListContainer = document.getElementById('momo-comparison-list');
+            momoListContainer.innerHTML = '';
+            
+            if (momoActiveTab === 'diff') {
+                momoListContainer.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px; font-size: 13px;">Chỉ hiển thị tổng quan chênh lệch. Hãy chọn Chi tiêu hoặc Thu nhập để xem chi tiết.</div>';
+                return;
+            }
+
+            let currList = [];
+            let prevList = [];
+
+            if (momoActiveTab === 'in') {
+                currList = currObj.income_chart_data; 
+                prevList = prevObj.income_chart_data;
+            } else {
+                if (momoSubTab === 'child') {
+                    currList = currObj.child_chart_data; 
+                    prevList = prevObj.child_chart_data;
+                } else {
+                    currList = currObj.parent_chart_data; 
+                    prevList = prevObj.parent_chart_data;
+                }
+            }
+
+            if(currList.length === 0 && prevList.length === 0) {
+                momoListContainer.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px; font-size: 13px;">Không có biến động danh mục</div>';
+                return;
+            }
+
+            let uniqueCatNames = Array.from(new Set([...currList.map(c => c.name), ...prevList.map(c => c.name)]));
+
+            uniqueCatNames.forEach(catName => {
+                let currItem = currList.find(c => c.name === catName);
+                let prevItem = prevList.find(c => c.name === catName);
+
+                let cAmt = currItem ? currItem.amount : 0;
+                let pAmt = prevItem ? prevItem.amount : 0;
+                let icon = currItem ? currItem.icon : (prevItem ? prevItem.icon : "❔");
+                let color = currItem ? currItem.color : (prevItem ? prevItem.color : "#9ca3af");
+                
+                let diffAmt = cAmt - pAmt;
+                let diffHtml = "";
+                if(diffAmt > 0) {
+                    diffHtml = `<span style="color:#ef4444; font-size:12px; font-weight:500;">↗ ${diffAmt.toLocaleString('en-US')}đ</span>`;
+                } else if(diffAmt < 0) {
+                    diffHtml = `<span style="color:#22c55e; font-size:12px; font-weight:500;">↘ ${Math.abs(diffAmt).toLocaleString('en-US')}đ</span>`;
+                } else {
+                    diffHtml = `<span style="color:#94a3b8; font-size:12px;"> không đổi</span>`;
+                }
+
+                momoListContainer.innerHTML += `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid #f1f5f9;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 18px; background: ${color}15; padding: 6px; border-radius: 8px;">${icon}</span>
+                            <span style="font-size: 14px; font-weight: 500; color: #1e293b;">${catName}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 14px; font-weight: bold; color: #1e293b;">${cAmt.toLocaleString('en-US')}đ</div>
+                            <div>${diffHtml}</div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        window.onload = function() { 
+            setMainTab(currentMainTab); 
+            switchSection(currentSection);
+        };
+        {% endif %}
+
+        function setType(type) {
+            document.getElementById('formType').value = type;
+            const btnOut = document.getElementById('btn-type-out');
+            const btnIn = document.getElementById('btn-type-in');
+            const catGroupOut = document.getElementById('categoryGroupOut');
+            const catGroupIn = document.getElementById('categoryGroupIn');
+            
+            if (type === 'out') {
+                btnOut.classList.add('active-out'); btnIn.classList.remove('active-in');
+                catGroupOut.style.display = 'block'; catGroupIn.style.display = 'none';
+            } else {
+                btnIn.classList.add('active-in'); btnOut.classList.remove('active-out');
+                catGroupOut.style.display = 'none'; catGroupIn.style.display = 'block';
+            }
+        }
+
+        function openForm() { 
+            document.getElementById('addModal').style.display = 'flex';
+            if (typeof currentMainTab !== 'undefined') {
+                setType(currentMainTab);
+            } else {
+                setType('out');
+            }
+        }
+        
+        function closeForm() { document.getElementById('addModal').style.display = 'none'; }
+
+        // MÃ JS KIỂM TRA NHIỆM VỤ GIỮ NGUYÊN (ĐÃ SỬ DỤNG FETCH API)
+        let currentActionUrl = "";
+        let currentTaskBtn = null;
+        let currentTaskDate = "";
+        let currentTaskIndex = -1;
+        let isTaskCurrentlyDone = false;
+
+        function openTaskConfirm(date, index, isDone, btnElement) {
+            document.getElementById('taskModal').style.display = 'flex';
+            currentTaskDate = date;
+            currentTaskIndex = index;
+            isTaskCurrentlyDone = isDone;
+            currentTaskBtn = btnElement;
+
+            if (isDone) {
+                document.getElementById('taskConfirmMsg').innerText = "Bạn muốn hủy hoàn thành nhiệm vụ này?";
+                currentActionUrl = "/complete/" + date + "/" + index + "?uncheck=1";
+            } else {
+                document.getElementById('taskConfirmMsg').innerText = "Bạn đã chắc chắn hoàn thành nhiệm vụ này chưa?";
+                currentActionUrl = "/complete/" + date + "/" + index;
+            }
+        }
+
+        function closeTaskConfirm() { document.getElementById('taskModal').style.display = 'none'; }
+
+        document.getElementById('btnConfirmTask').onclick = function() {
+            if(!currentActionUrl) return;
+
+            let originalText = this.innerText;
+            this.innerText = "...";
+
+            fetch(currentActionUrl)
+            .then(res => res.json())
+            .then(data => {
+                if(data.success) {
+                    if (isTaskCurrentlyDone) {
+                        currentTaskBtn.innerHTML = "⬜";
+                        currentTaskBtn.setAttribute("onclick", `openTaskConfirm('${currentTaskDate}', ${currentTaskIndex}, false, this)`);
+                    } else {
+                        currentTaskBtn.innerHTML = "✅";
+                        currentTaskBtn.setAttribute("onclick", `openTaskConfirm('${currentTaskDate}', ${currentTaskIndex}, true, this)`);
+                    }
+                    closeTaskConfirm(); 
+                }
+            })
+            .catch(err => {
+                alert("Có lỗi xảy ra, không thể cập nhật.");
+            })
+            .finally(() => {
+                this.innerText = originalText;
+            });
+        };
+
+        function showDay(date, el) {
+            el.closest('.main').querySelectorAll('.task-list').forEach(div => div.classList.remove('active'));
+            el.parentNode.querySelectorAll('.domino-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('day-' + date).classList.add('active');
+            el.classList.add('active');
+        }
+    </script>
+</body>
+</html>
+"""
+
+def get_prev_next_month(year, month):
+    curr = datetime(year, month, 1)
+    prev_m = curr - timedelta(days=1)
+    num_days = calendar.monthrange(year, month)[1]
+    next_m = curr + timedelta(days=num_days)
+    return prev_m.year, prev_m.month, next_m.year, next_m.month
+
+# --- FLASK WEB ROUTES CONTROLLER ---
+
+@app.route('/')
+def index():
+    today = datetime.today()
+    start_week = today - timedelta(days=today.weekday())
+    week_data = []
+    
+    selected_date = request.args.get('date', today.strftime("%Y-%m-%d"))
+    
+    day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"]
+    for i in range(7):
+        d = start_week + timedelta(days=i)
+        d_str = d.strftime("%Y-%m-%d")
+        week_data.append({
+            "date": d_str,
+            "name": day_names[i],
+            "data": get_or_create_data(d_str)
+        })
+    
+    return render_template_string(
+        HTML_TEMPLATE, 
+        active="tasks", 
+        week_data=week_data, 
+        tasks=TASKS, 
+        selected_date=selected_date
+    )
+
+@app.route('/history_tasks')
+def history_tasks():
+    today = datetime.today()
+    year = request.args.get('year', today.year, type=int)
+    month = request.args.get('month', today.month, type=int)
+    
+    years = [2024, 2025, 2026]
+    months = list(range(1, 13))
+    
+    num_days = calendar.monthrange(year, month)[1]
+    month_data = []
+    for day in range(1, num_days + 1):
+        d_str = f"{year}-{month:02d}-{day:02d}"
+        month_data.append({
+            "date": d_str,
+            "day_num": day,
+            "data": get_or_create_data(d_str)
+        })
+        
+    return render_template_string(
+        HTML_TEMPLATE, 
+        active="history_tasks", 
+        years=years, 
+        months=months, 
+        selected_year=year, 
+        selected_month=month, 
+        month_data=month_data, 
+        tasks=TASKS, 
+        selected_date=None
+    )
+
+@app.route('/expenses')
+def expenses():
+    today = datetime.today()
+    year = request.args.get('year', today.year, type=int)
+    month = request.args.get('month', today.month, type=int)
+    tab = request.args.get('tab', 'out')
+    sec = request.args.get('sec', 'tinh-hinh')
+    
+    prev_y, prev_m, next_y, next_m = get_prev_next_month(year, month)
+    
+    # Lấy toàn bộ khối dữ liệu gộp (tất cả các khoảng thời gian)
+    all_expense_data = get_all_expense_data(year, month)
+    
+    return render_template_string(
+        HTML_TEMPLATE,
+        active="exp",
+        selected_year=year,
+        selected_month=month,
+        prev_year=prev_y,
+        prev_month=prev_m,
+        next_year=next_y,
+        next_month=next_m,
+        init_tab=tab,
+        init_sec=sec,
+        exp_monthly=all_expense_data["exp_monthly"],
+        bdData=all_expense_data["bdData"]
+    )
+
+# --- API CHO FRONTEND (Lấy lại dữ liệu mà không cần tải lại web) ---
+@app.route('/api/expenses_data')
+def api_expenses_data():
+    year = request.args.get('year', datetime.today().year, type=int)
+    month = request.args.get('month', datetime.today().month, type=int)
+    all_expense_data = get_all_expense_data(year, month)
+    return jsonify(all_expense_data)
+
+# ĐÃ SỬA: Đổi hàm Thêm giao dịch sang JSON, không gây Redirect (Reload trang)
+@app.route('/add', methods=['POST'])
+def add_transaction():
+    t_type = request.form.get('type', 'out')
+    desc = request.form.get('desc', 'Không rõ')
+    try:
+        amount = float(request.form.get('amount', 0))
+    except ValueError:
+        amount = 0
+        
+    if t_type == 'out':
+        category = request.form.get('category_out', 'Chưa phân loại')
+    else:
+        category = request.form.get('category_in', 'Khác (Thu)')
+        
+    today_str = datetime.today().strftime("%Y-%m-%d")
+    data = get_or_create_data(today_str)
+    now_time = datetime.now().strftime("%H:%M")
+    
+    new_txn = {
+        "type": t_type,
+        "category": category,
+        "desc": desc,
+        "amount": amount,
+        "time": now_time
+    }
+    
+    data["expenses"].append(new_txn)
+    save_data(today_str, data)
+    
+    return jsonify({"success": True})
+
+@app.route('/complete/<date_str>/<int:index>')
+def complete_task(date_str, index):
+    uncheck = request.args.get('uncheck', '0')
+    data = get_or_create_data(date_str)
+    
+    if index < len(data["status"]):
+        data["status"][index] = (uncheck != '1')
+        save_data(date_str, data)
+        
+    return jsonify({"success": True})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=8080)
