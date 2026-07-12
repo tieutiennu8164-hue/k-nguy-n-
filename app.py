@@ -195,16 +195,16 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Bình Kỷ Luật</title>
+    <meta charset="UTF-8">
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#d82d8b">
+    <title>Bình Kỷ Luật</title>
 </head>
 <body>
     <h1>App Kỷ Luật Đã Sẵn Sàng</h1>
-    <p>Hãy dán toàn bộ mã giao diện HTML đẹp đẽ trước đó của bạn vào đây thay thế cho đoạn này.</p>
-    
+    <!-- GIAO DIỆN CỦA BẠN SẼ NẰM Ở ĐÂY -->
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js'); });
