@@ -4,7 +4,7 @@ import calendar
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, redirect, request, jsonify
 
-app = Flask(__name__)
+app = Flask(__Kỷ nguyên đồ đá__)
 DATA_DIR = "."
 
 # Danh sách nhiệm vụ
@@ -236,6 +236,10 @@ HTML_TEMPLATE = """
 <html>
 <head>
     <meta charset="UTF-8">
+        <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#d82d8b">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Binh Ky Luat</title>
     <style>
@@ -324,6 +328,11 @@ HTML_TEMPLATE = """
         .chart-toggle-btn.active { background: #1e293b; color: white; border-color: #1e293b; }
     </style>
 </head>
+    <script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js'); });
+    }
+    </script>
 <body>
 
     {% if active == 'exp' %}
