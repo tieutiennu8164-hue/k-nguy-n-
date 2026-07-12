@@ -191,9 +191,7 @@ def get_all_expense_data(year, month):
 # ==========================================================
 # ⚠️ HÃY THAY TOÀN BỘ CHUỖI GIAO DIỆN HTML GỐC CỦA BẠN VÀO GIỮA CẶP DẤU """ KHỔNG LỒ NÀY NHÉ
 # Đừng quên thêm 4 dòng thẻ <meta> và đoạn <script> đăng ký sw.js như mình hướng dẫn ở trên vào HTML của bạn nhé!
-HTML_TEMPLATE = """
-
-"""
+HTML_TEMPLATE = """"""
 # ==========================================================
 
 def get_prev_next_month(year, month):
@@ -215,7 +213,7 @@ def index():
         d = start_week + timedelta(days=i)
         d_str = d.strftime("%Y-%m-%d")
         week_data.append({"date": d_str, "name": day_names[i], "data": get_or_create_data(d_str)})
-    return render_template_string(HTML_TEMPLATE, active="tasks", week_data=week_data, tasks=TASKS, selected_date=selected_date)
+    return render_template('index.html', active="tasks", week_data=week_data, tasks=TASKS, selected_date=selected_date)
 
 @app.route('/expenses')
 def expenses():
@@ -227,7 +225,7 @@ def expenses():
     
     prev_y, prev_m, next_y, next_m = get_prev_next_month(year, month)
     all_expense_data = get_all_expense_data(year, month)
-    return render_template_string(HTML_TEMPLATE, active="exp", selected_year=year, selected_month=month, prev_year=prev_y, prev_month=prev_m, next_year=next_y, next_month=next_m, init_tab=tab, init_sec=sec, exp_monthly=all_expense_data["exp_monthly"], bdData=all_expense_data["bdData"])
+    return render_template('index.html', active="exp", selected_year=year, selected_month=month, prev_year=prev_y, prev_month=prev_m, next_year=next_y, next_month=next_m, init_tab=tab, init_sec=sec, exp_monthly=all_expense_data["exp_monthly"], bdData=all_expense_data["bdData"])
 
 @app.route('/api/expenses_data')
 def api_expenses_data():
