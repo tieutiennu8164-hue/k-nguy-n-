@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 # ==========================================================
 # ⚠️ BƯỚC NÀY QUAN TRỌNG: Hãy thay 2 thông tin bạn vừa lấy từ Supabase vào đây nhé!
-SUPABASE_URL = "https://leuwptvyrmqueyfgdeuo.supabase.co/rest/v1"
+SUPABASE_URL = "https://leuwptvyrmqueyfgdeuo.supabase.co"
 SUPABASE_KEY = "sb_publishable_YY_dluN8BsDK7wM04ZyRig_gX6AEzC2"
 # ==========================================================
 
