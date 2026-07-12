@@ -192,26 +192,7 @@ def get_all_expense_data(year, month):
 # ⚠️ HÃY THAY TOÀN BỘ CHUỖI GIAO DIỆN HTML GỐC CỦA BẠN VÀO GIỮA CẶP DẤU """ KHỔNG LỒ NÀY NHÉ
 # Đừng quên thêm 4 dòng thẻ <meta> và đoạn <script> đăng ký sw.js như mình hướng dẫn ở trên vào HTML của bạn nhé!
 HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <link rel="manifest" href="/manifest.json">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#d82d8b">
-    <title>Bình Kỷ Luật</title>
-</head>
-<body>
-    <h1>App Kỷ Luật Đã Sẵn Sàng</h1>
-    <!-- GIAO DIỆN CỦA BẠN SẼ NẰM Ở ĐÂY -->
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js'); });
-        }
-    </script>
-</body>
-</html>
+
 """
 # ==========================================================
 
