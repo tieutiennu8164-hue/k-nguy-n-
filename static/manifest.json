@@ -1,0 +1,17 @@
+{
+  "name": "Kỷ Nguyên Đồ Đá",
+  "short_name": "Quản Lý",
+  "description": "Ứng dụng quản lý công việc và chi tiêu cá nhân",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#007bff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
