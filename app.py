@@ -1,12 +1,12 @@
 import calendar
 from datetime import datetime, timedelta
-from flask import Flask, render_template_string, redirect, request, jsonify
+from flask import Flask, render_template, redirect, request, jsonify
 from supabase import create_client, Client
 
 app = Flask(__name__)
 
 # ==========================================================
-# ⚠️ BƯỚC NÀY QUAN TRỌNG: Hãy thay 2 thông tin bạn vừa lấy từ Supabase vào đây nhé!
+# CẤU HÌNH SUPABASE
 SUPABASE_URL = "https://leuwptvyrmqueyfgdeuo.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ"
 # ==========================================================
@@ -188,12 +188,6 @@ def get_all_expense_data(year, month):
         }
     }
 
-# ==========================================================
-# ⚠️ HÃY THAY TOÀN BỘ CHUỖI GIAO DIỆN HTML GỐC CỦA BẠN VÀO GIỮA CẶP DẤU """ KHỔNG LỒ NÀY NHÉ
-# Đừng quên thêm 4 dòng thẻ <meta> và đoạn <script> đăng ký sw.js như mình hướng dẫn ở trên vào HTML của bạn nhé!
-HTML_TEMPLATE = """"""
-# ==========================================================
-
 def get_prev_next_month(year, month):
     curr = datetime(year, month, 1)
     prev_m = curr - timedelta(days=1)
@@ -269,4 +263,5 @@ def sw():
     return app.response_class("self.addEventListener('fetch', function() {});", mimetype='application/javascript')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8080)
+    # Đã sửa lại để Render có thể chạy được mượt mà
+    app.run(host='0.0.0.0', port=5000)
