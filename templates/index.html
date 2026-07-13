@@ -2,9 +2,9 @@ import json
 import os
 import calendar
 from datetime import datetime, timedelta
-from flask import Flask, render_template_string, redirect, request, jsonify
+from flask import Flask, render_template_string, redirect, request, jsonify, make_response
 
-app = Flask(__Kỷ nguyên đồ đá__)
+app = Flask(__name__)
 DATA_DIR = "."
 
 # Danh sách nhiệm vụ
@@ -236,12 +236,15 @@ HTML_TEMPLATE = """
 <html>
 <head>
     <meta charset="UTF-8">
-        <link rel="manifest" href="/manifest.json">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#d82d8b">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Binh Ky Luat</title>
+    
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Binh Ky Luat">
+    <link rel="apple-touch-icon" href="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=192&h=192&fit=crop">
+    
     <style>
         * { box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background: #f8f9fa; display: flex; flex-direction: column; height: 100vh; }
@@ -288,7 +291,7 @@ HTML_TEMPLATE = """
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); z-index: 100; justify-content: center; align-items: flex-end; }
         .modal-box { background: white; width: 100%; padding: 20px; border-radius: 20px 20px 0 0; animation: slideUp 0.3s ease-out; position: relative; }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-        
+                
         .type-btn { flex: 1; padding: 12px; text-align: center; border-radius: 8px; border: 1px solid #cbd5e1; color: #64748b; font-weight: bold; font-size: 14px; cursor: pointer; transition: 0.2s; }
         .type-btn.active-out { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
         .type-btn.active-in { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
@@ -327,12 +330,19 @@ HTML_TEMPLATE = """
         .chart-toggle-btn { padding: 6px 14px; border: 1px solid #cbd5e1; background: white; font-size: 12px; color: #64748b; font-weight: bold; border-radius: 20px; cursor: pointer; transition: 0.2s; }
         .chart-toggle-btn.active { background: #1e293b; color: white; border-color: #1e293b; }
     </style>
-</head>
+    
     <script>
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js'); });
-    }
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('/sw.js').then(function(registration) {
+                    console.log('ServiceWorker đăng ký thành công với scope: ', registration.scope);
+                }, function(err) {
+                    console.log('ServiceWorker đăng ký thất bại: ', err);
+                });
+            });
+        }
     </script>
+</head>
 <body>
 
     {% if active == 'exp' %}
@@ -344,13 +354,11 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="main">
-            <!-- HAI MỤC CHUYỂN ĐỔI CHẾ ĐỘ XEM ĐƯỢC ĐẶT LÊN TRÊN CÙNG -->
             <div class="domino-container" style="margin-bottom: 15px; padding: 0;">
                 <div class="domino-btn {% if init_sec != 'bien-dong' %}active{% endif %}" style="flex: 1; margin-right: 5px; height: 42px; justify-content: center; border-radius: 12px; z-index: 1;" id="btn-sec-tinh-hinh" onclick="switchSection('tinh-hinh')">Tình hình thu chi</div>
                 <div class="domino-btn {% if init_sec == 'bien-dong' %}active{% endif %}" style="flex: 1; margin-left: 5px; margin-right: 0; height: 42px; justify-content: center; border-radius: 12px; z-index: 1;" id="btn-sec-bien-dong" onclick="switchSection('bien-dong')">Biến động thu chi</div>
             </div>
 
-            <!-- KHỐI 1: TÌNH HÌNH THU CHI -->
             <div id="sec-tinh-hinh" style="{% if init_sec == 'bien-dong' %}display: none;{% endif %}">
                 
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; background: white; padding: 12px 18px; border-radius: 14px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.01);">
@@ -412,7 +420,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- KHỐI 2: BIẾN ĐỘNG THU CHI -->
             <div id="sec-bien-dong" style="{% if init_sec != 'bien-dong' %}display: none;{% endif %}">
                 <div class="momo-time-tabs">
                     <div class="momo-time-tab" id="momo-time-week" onclick="setMomoTime('week')">Theo tuần</div>
@@ -459,7 +466,6 @@ HTML_TEMPLATE = """
         </div>
 
     {% else %}
-        <!-- PHẦN GIAO DIỆN KỶ LUẬT -->
         <div class="app-header">
             <div class="header-title">Kỷ Luật Bản Thân</div>
         </div>
@@ -537,13 +543,11 @@ HTML_TEMPLATE = """
         </a>
     </div>
 
-    <!-- MODAL THÊM GIAO DỊCH -->
     <div id="addModal" class="modal-overlay">
         <div class="modal-box">
             <div class="close-modal" onclick="closeForm()">×</div>
             <h3 style="margin-top:0; margin-bottom: 20px; color: #1e293b; text-align: center;">Thêm Giao Dịch</h3>
             
-            <!-- ĐÃ SỬA: Bỏ action, thêm ID form để xử lý gửi ngầm qua JS -->
             <form id="addTransactionForm">
                 <div style="display: flex; gap: 10px; margin-bottom: 20px;">
                     <div id="btn-type-out" class="type-btn active-out" onclick="setType('out')">🔴 Chi tiêu</div>
@@ -564,7 +568,7 @@ HTML_TEMPLATE = """
                 </div>
 
                 <div id="categoryGroupIn" style="display: none;">
-                    <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Nguồn Thu</label>
+                                        <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Nguồn Thu</label>
                     <select name="category_in" class="form-select">
                         <option value="Tiền lương">💵 Tiền lương</option>
                         <option value="Tiền thưởng">🎁 Tiền thưởng</option>
@@ -584,7 +588,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- MODAL XÁC NHẬN NHIỆM VỤ -->
     <div id="taskModal" class="modal-overlay" style="align-items: center;">
         <div class="modal-box" style="border-radius: 20px; padding: 25px; text-align: center; margin: 0 30px; width: auto; animation: none;">
             <div style="font-size: 40px; margin-bottom: 10px;">🤔</div>
@@ -599,7 +602,7 @@ HTML_TEMPLATE = """
     <script>
         {% if active == 'exp' %}
         
-        // CÁC BIẾN CÓ THỂ ĐƯỢC CẬP NHẬT LẠI KHI THÊM GIAO DỊCH
+        // CÁC BIẾN CÓ THỂ ĐƯỢC CẬP NHẬT LẠI KHI THÊM GIAO DỊCH (ĐÃ SỬA LỖI XUỐNG DÒNG CŨ)
         let childData = {{ exp_monthly.child_chart_data | tojson | safe }};
         let parentData = {{ exp_monthly.parent_chart_data | tojson | safe }};
         let incomeData = {{ exp_monthly.income_chart_data | tojson | safe }};
@@ -629,7 +632,6 @@ HTML_TEMPLATE = """
             fetch(`/api/expenses_data?year=${year}&month=${month}`)
                 .then(res => res.json())
                 .then(data => {
-                    // Ghi đè lại các biến dữ liệu
                     childData = data.exp_monthly.child_chart_data;
                     parentData = data.exp_monthly.parent_chart_data;
                     incomeData = data.exp_monthly.income_chart_data;
@@ -639,11 +641,9 @@ HTML_TEMPLATE = """
                     allTransactions = data.exp_monthly.transactions;
                     bdData = data.bdData;
                     
-                    // Cập nhật thẻ số tiền mặt
                     document.getElementById('summary-total-out').innerText = data.exp_monthly.total_out.toLocaleString('en-US') + 'đ';
                     document.getElementById('summary-total-in').innerText = data.exp_monthly.total_in.toLocaleString('en-US') + 'đ';
                     
-                    // Vẽ lại giao diện ngay tức thì
                     renderView();
                     renderMomoSection();
                 });
@@ -666,7 +666,6 @@ HTML_TEMPLATE = """
                 if(data.success) {
                     closeForm();
                     this.reset();
-                    // Load lại dữ liệu và update giao diện!
                     refreshExpenseData();
                 }
             })
@@ -861,7 +860,6 @@ HTML_TEMPLATE = """
         }
 
         function renderMomoSection() {
-            // LẤY RA DATA THEO THỜI GIAN LỰA CHỌN (TUẦN/THÁNG/NĂM)
             const timeData = bdData[momoTime];
             const currObj = timeData.curr;
             const prevObj = timeData.prev;
@@ -884,7 +882,7 @@ HTML_TEMPLATE = """
                 let diff = currVal - prevVal;
                 if(diff >= 0) {
                     insightHtml = `<span style="color:#ef4444">↗ Tăng ${diff.toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
-                    document.getElementById('momo-summary-insight').style.background = "#fef2f2";
+                                        document.getElementById('momo-summary-insight').style.background = "#fef2f2";
                 } else {
                     insightHtml = `<span style="color:#22c55e">↘ Giảm ${Math.abs(diff).toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
                     document.getElementById('momo-summary-insight').style.background = "#f0fdf4";
@@ -971,7 +969,7 @@ HTML_TEMPLATE = """
                 let cAmt = currItem ? currItem.amount : 0;
                 let pAmt = prevItem ? prevItem.amount : 0;
                 let icon = currItem ? currItem.icon : (prevItem ? prevItem.icon : "❔");
-                let color = currItem ? currItem.color : (prevItem ? prevItem.color : "#9ca3af");
+                let color = currItem ? currItem.color : (prevItem ? prevItem.icon ? prevItem.color : "#9ca3af" : "#9ca3af");
                 
                 let diffAmt = cAmt - pAmt;
                 let diffHtml = "";
@@ -1031,7 +1029,6 @@ HTML_TEMPLATE = """
         
         function closeForm() { document.getElementById('addModal').style.display = 'none'; }
 
-        // MÃ JS KIỂM TRA NHIỆM VỤ GIỮ NGUYÊN (ĐÃ SỬ DỤNG FETCH API)
         let currentActionUrl = "";
         let currentTaskBtn = null;
         let currentTaskDate = "";
@@ -1109,7 +1106,7 @@ def index():
     today = datetime.today()
     start_week = today - timedelta(days=today.weekday())
     week_data = []
-    
+        
     selected_date = request.args.get('date', today.strftime("%Y-%m-%d"))
     
     day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"]
@@ -1197,7 +1194,7 @@ def api_expenses_data():
     all_expense_data = get_all_expense_data(year, month)
     return jsonify(all_expense_data)
 
-# ĐÃ SỬA: Đổi hàm Thêm giao dịch sang JSON, không gây Redirect (Reload trang)
+# ĐƠN VỊ THÊM GIAO DỊCH QUA JSON
 @app.route('/add', methods=['POST'])
 def add_transaction():
     t_type = request.form.get('type', 'out')
@@ -1240,5 +1237,76 @@ def complete_task(date_str, index):
         
     return jsonify({"success": True})
 
+
+# ======================================================================
+# PHẦN ĐƯỢC BỔ SUNG: CÁC ROUTE PHỤC VỤ DỮ LIỆU CẤU HÌNH CHO ỨNG DỤNG PWA
+# ======================================================================
+
+@app.route('/manifest.json')
+def serve_manifest():
+    """Cung cấp thông tin khai báo App để trình duyệt điện thoại cho phép Cài đặt (Add to Home Screen)"""
+    manifest_data = {
+        "name": "Bình Kỷ Luật & Chi Tiêu",
+        "short_name": "BinhKyLuat",
+        "description": "Ứng dụng PWA quản lý chi tiêu và theo dõi kỷ luật của Bình.",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#f8f9fa",
+        "theme_color": "#d82d8b",
+        "orientation": "portrait-primary",
+        "icons": [
+            {
+                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=192&h=192&fit=crop",
+                "sizes": "192x192",
+                "type": "image/jpeg"
+            },
+            {
+                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=512&h=512&fit=crop",
+                "sizes": "512x512",
+                "type": "image/jpeg"
+            }
+        ]
+    }
+    return jsonify(manifest_data)
+
+@app.route('/sw.js')
+def serve_sw():
+    """Cung cấp Service Worker quản lý việc cài đặt ngầm giúp App hoạt động mượt mà ổn định hơn"""
+    sw_code = """
+    const CACHE_NAME = 'binh-kyluat-v1';
+    const ASSETS_TO_CACHE = [
+        '/',
+        '/expenses',
+        '/history_tasks'
+    ];
+
+    self.addEventListener('install', event => {
+        event.waitUntil(
+            caches.open(CACHE_NAME).then(cache => {
+                return cache.addAll(ASSETS_TO_CACHE);
+            }).then(() => self.skipWaiting())
+        );
+    });
+
+    self.addEventListener('activate', event => {
+        event.waitUntil(self.clients.claim());
+    });
+
+    self.addEventListener('fetch', event => {
+        event.respondWith(
+            caches.match(event.request).then(cachedResponse => {
+                if (cachedResponse) {
+                    return cachedResponse;
+                }
+                return fetch(event.request);
+            })
+        );
+    });
+    """
+    response = make_response(sw_code)
+    response.headers['Content-Type'] = 'application/javascript'
+    return response
+
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
+        
