@@ -261,7 +261,7 @@
                     <a href="/history_tasks?year={{ y }}&month={{ selected_month }}" class="domino-btn domino-btn-year {% if y == selected_year %}active{% endif %}">Năm {{ y }}</a>
                     {% endfor %}
                 </div>
-                <div class="domino-container">
+                            <div class="domino-container">
                                         {% for m in months %}
                     <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
                     {% endfor %}
@@ -498,7 +498,7 @@
             } else {
                 data.forEach(item => {
                     const heightPx = item.pct > 0 ? (item.pct * 1.1) + 12 : 12; 
-                                                 barColumnsContainer.innerHTML += `
+                                                                     barColumnsContainer.innerHTML += `
                         <div style="display: flex; flex-direction: column; align-items: center; width: 50px;">
                             <span style="font-size: 10px; font-weight: bold; color: #64748b; margin-bottom: 4px;">${item.pct}%</span>
                             <div style="width: 22px; height: ${heightPx}px; background: ${item.color}; border-radius: 4px 4px 0 0;"></div>
@@ -750,7 +750,7 @@
             switchSection(currentSection);
         };
         {% endif %}
-
+        
         function setType(type) {
             document.getElementById('formType').value = type;
             const btnOut = document.getElementById('btn-type-out');
@@ -838,6 +838,15 @@
     </script>
     
     <script>
+        // MÃ JS FIX LỖI CHẶN CHUYỂN TRANG TRÊN PWA/ĐIỆN THOẠI
+        document.addEventListener('click', function(event) {
+            var target = event.target.closest('a');
+            if (target && target.host === window.location.host && !target.hasAttribute('target')) {
+                event.preventDefault();
+                window.location.href = target.href;
+            }
+        });
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
                 navigator.serviceWorker.register('/sw.js').then(function(registration) {
