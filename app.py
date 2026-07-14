@@ -391,7 +391,7 @@ def complete_task(date_str, index):
 def serve_manifest():
     manifest_data = {
         "name": "Kỷ Nguyên Đồ Đá",
-        "short_name": "Kỷ Nguyên",
+        "short_name": "Kỷ Nguyên Đồ Đá",
         "description": "Ứng dụng quản lý chi tiêu và theo dõi kỷ luật của Bình.",
         "start_url": "/",
         "display": "standalone",
