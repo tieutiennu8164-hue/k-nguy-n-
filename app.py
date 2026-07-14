@@ -1,26 +1,24 @@
+import json
 import os
 import calendar
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, jsonify, make_response
+from flask import Flask, render_template, redirect, request, jsonify, make_response
 from supabase import create_client, Client
 
 app = Flask(__name__)
 
-# ==========================================
-# CẤU HÌNH SUPABASE (Lấy từ biến môi trường Render)
-# ==========================================
-URL = os.environ.get("SUPABASE_URL", "")
-KEY = os.environ.get("SUPABASE_KEY", "")
+# --- KẾT NỐI SUPABASE ---
+# Lấy URL và KEY từ biến môi trường của Render
+SUPABASE_URL = os.environ.get("https://leuwptvyrmqueyfgdeuo.supabase.co", "")
+SUPABASE_KEY = os.environ.get("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ", "")
 
-# Khởi tạo Supabase Client
-if URL and KEY:
-    supabase: Client = create_client(URL, KEY)
+# Khởi tạo Supabase (chỉ khởi tạo nếu có key)
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
-    print("CẢNH BÁO: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY.")
+    supabase = None
 
-# ==========================================
-# DANH SÁCH & CẤU HÌNH DANH MỤC
-# ==========================================
+# Danh sách nhiệm vụ
 TASKS = [
     "1. Dậy sớm trước 8:00", "2. Uống một cốc nước", "3. Đánh răng rửa mặt",
     "4. Ăn sáng trước 8:00", "5. Không dùng ĐT 30p đầu ngày", "6. Làm việc",
@@ -28,6 +26,7 @@ TASKS = [
     "10. Học 30p kiến thức mới & Ghi lại", "11. Dành ra 1 tiếng để học tập"
 ]
 
+# MAP DANH MỤC CHI TIÊU
 CHILD_CATEGORIES = {
     "Ăn uống": {"color": "#f97316", "parent": "Chi tiêu - sinh hoạt", "icon": "🍲"},
     "Hóa đơn": {"color": "#34d399", "parent": "Chi phí cố định", "icon": "🧾"},
@@ -44,6 +43,7 @@ PARENT_CATEGORIES = {
     "Chưa phân loại": {"color": "#f472b6", "icon": "❔"}
 }
 
+# MAP DANH MỤC THU NHẬP
 INCOME_CATEGORIES = {
     "Tiền lương": {"color": "#22c55e", "icon": "💵"},
     "Tiền thưởng": {"color": "#3b82f6", "icon": "🎁"},
@@ -51,22 +51,17 @@ INCOME_CATEGORIES = {
     "Khác (Thu)": {"color": "#ec4899", "icon": "💰"}
 }
 
-# ==========================================
-# HÀM XỬ LÝ DỮ LIỆU VỚI SUPABASE
-# ==========================================
 def save_data(date_str, data):
+    if not supabase: return
     payload = {
         "date_str": date_str,
         "status": data.get("status", [False]*len(TASKS)),
         "expenses": data.get("expenses", [])
     }
     try:
-        # Cập nhật nếu đã có, hoặc tạo mới nếu chưa có
-        res = supabase.table("user_tasks").update(payload).eq("date_str", date_str).execute()
-        if len(res.data) == 0:
-            supabase.table("user_tasks").insert(payload).execute()
+        supabase.table("user_tasks").upsert(payload).execute()
     except Exception as e:
-        print("Lỗi khi lưu Supabase:", e)
+        print("Lỗi lưu Supabase:", e)
 
 def process_financials(data):
     data["list_in"] = [e for e in data.get("expenses", []) if e.get("type") == "in"]
@@ -76,18 +71,18 @@ def process_financials(data):
     return data
 
 def get_or_create_data(date_str):
-    try:
-        res = supabase.table("user_tasks").select("*").eq("date_str", date_str).execute()
-        if res.data:
-            data = res.data[0]
-        else:
-            data = {"date_str": date_str, "status": [False]*len(TASKS), "expenses": []}
-            supabase.table("user_tasks").insert(data).execute()
-    except Exception as e:
-        print("Lỗi đọc Supabase:", e)
-        data = {"date_str": date_str, "status": [False]*len(TASKS), "expenses": []}
-
-    data["date"] = data.get("date_str", date_str)
+    data = {"date": date_str, "status": [False]*len(TASKS), "expenses": []}
+    if supabase:
+        try:
+            response = supabase.table("user_tasks").select("*").eq("date_str", date_str).execute()
+            if response.data:
+                db_data = response.data[0]
+                data["status"] = db_data.get("status") or [False]*len(TASKS)
+                data["expenses"] = db_data.get("expenses") or []
+            else:
+                save_data(date_str, data)
+        except Exception as e:
+            print("Lỗi đọc Supabase:", e)
     return process_financials(data)
 
 def generate_chart_info(totals_dict, color_map, total_amount):
@@ -101,7 +96,14 @@ def generate_chart_info(totals_dict, color_map, total_amount):
     for cat, amount in sorted_cats:
         pct = (amount / total_amount) * 100 if total_amount > 0 else 0
         info = color_map.get(cat, {"color": "#9ca3af", "icon": "📦"})
-        chart_data.append({"name": cat, "amount": amount, "pct": round(pct), "color": info["color"], "icon": info["icon"]})
+        
+        chart_data.append({
+            "name": cat, 
+            "amount": amount, 
+            "pct": round(pct), 
+            "color": info["color"],
+            "icon": info["icon"]
+        })
         
         next_percent = current_percent + pct
         if len(sorted_cats) > 1 and pct > 1.5:
@@ -109,6 +111,7 @@ def generate_chart_info(totals_dict, color_map, total_amount):
             conic_gradient.append(f"white {next_percent - 1.5}% {next_percent}%")
         else:
             conic_gradient.append(f"{info['color']} {current_percent}% {next_percent}%")
+            
         current_percent = next_percent
 
     if not conic_gradient:
@@ -119,54 +122,66 @@ def generate_chart_info(totals_dict, color_map, total_amount):
 def get_financials_in_range(start_date, end_date):
     total_in = 0
     total_out = 0
+    
     child_totals = {cat: 0 for cat in CHILD_CATEGORIES.keys()}
     parent_totals = {cat: 0 for cat in PARENT_CATEGORIES.keys()}
     income_totals = {cat: 0 for cat in INCOME_CATEGORIES.keys()}
+    
     all_transactions = []
     
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
-    
-    # Lấy dữ liệu theo khoảng thời gian từ Supabase
-    try:
-        res = supabase.table("user_tasks").select("*").gte("date_str", start_str).lte("date_str", end_str).execute()
-        records = {row["date_str"]: row for row in res.data}
-    except Exception as e:
-        records = {}
+    fetched_data = {}
+
+    if supabase:
+        try:
+            # Truy vấn 1 lần từ Supabase để tăng tốc độ
+            response = supabase.table("user_tasks").select("*").gte("date_str", start_str).lte("date_str", end_str).execute()
+            fetched_data = {row["date_str"]: row for row in response.data}
+        except Exception as e:
+            print("Lỗi đọc khoảng thời gian Supabase:", e)
 
     current_date = start_date
     while current_date <= end_date:
         d_str = current_date.strftime("%Y-%m-%d")
-        if d_str in records:
-            data = records[d_str]
-            for e in data.get("expenses", []):
-                amt = e.get("amount", 0)
-                t_type = e.get("type", "out")
-                t_detail = {
-                    "date": d_str, "time": e.get("time", ""),
-                    "desc": e.get("desc", "Không có diễn giải"),
-                    "amount": amt, "type": t_type
-                }
+        data = fetched_data.get(d_str, {})
+        
+        for e in data.get("expenses", []):
+            amt = e.get("amount", 0)
+            t_type = e.get("type", "out")
+            
+            t_detail = {
+                "date": d_str,
+                "time": e.get("time", ""),
+                "desc": e.get("desc", "Không có diễn giải"),
+                "amount": amt,
+                "type": t_type
+            }
 
-                if t_type == "in":
-                    total_in += amt
-                    cat = e.get("category", "Khác (Thu)")
-                    if cat not in INCOME_CATEGORIES: cat = "Khác (Thu)"
-                    income_totals[cat] += amt
-                    t_detail["category"] = cat
-                    t_detail["icon"] = INCOME_CATEGORIES[cat]["icon"]
-                else:
-                    total_out += amt
-                    cat = e.get("category", "Chưa phân loại")
-                    if cat not in CHILD_CATEGORIES: cat = "Chưa phân loại"
-                    child_totals[cat] += amt
-                    parent_cat = CHILD_CATEGORIES[cat]["parent"]
-                    parent_totals[parent_cat] += amt
-                    t_detail["category"] = cat
-                    t_detail["parent_category"] = parent_cat
-                    t_detail["icon"] = CHILD_CATEGORIES[cat]["icon"]
-                    
-                all_transactions.append(t_detail)
+            if t_type == "in":
+                total_in += amt
+                cat = e.get("category", "Khác (Thu)")
+                if cat not in INCOME_CATEGORIES:
+                    cat = "Khác (Thu)"
+                income_totals[cat] += amt
+                t_detail["category"] = cat
+                t_detail["icon"] = INCOME_CATEGORIES[cat]["icon"]
+            else:
+                total_out += amt
+                cat = e.get("category", "Chưa phân loại")
+                if cat not in CHILD_CATEGORIES:
+                    cat = "Chưa phân loại"
+                
+                child_totals[cat] += amt
+                parent_cat = CHILD_CATEGORIES[cat]["parent"]
+                parent_totals[parent_cat] += amt
+                
+                t_detail["category"] = cat
+                t_detail["parent_category"] = parent_cat
+                t_detail["icon"] = CHILD_CATEGORIES[cat]["icon"]
+                
+            all_transactions.append(t_detail)
+            
         current_date += timedelta(days=1)
 
     child_chart_data, child_gradient = generate_chart_info(child_totals, CHILD_CATEGORIES, total_out)
@@ -176,10 +191,14 @@ def get_financials_in_range(start_date, end_date):
     all_transactions.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
 
     return {
-        "total_in": total_in, "total_out": total_out,
-        "child_chart_data": child_chart_data, "child_gradient": child_gradient,
-        "parent_chart_data": parent_chart_data, "parent_gradient": parent_gradient,
-        "income_chart_data": income_chart_data, "income_gradient": income_gradient,
+        "total_in": total_in,
+        "total_out": total_out,
+        "child_chart_data": child_chart_data,
+        "child_gradient": child_gradient,
+        "parent_chart_data": parent_chart_data,
+        "parent_gradient": parent_gradient,
+        "income_chart_data": income_chart_data,
+        "income_gradient": income_gradient,
         "transactions": all_transactions
     }
 
@@ -234,9 +253,8 @@ def get_prev_next_month(year, month):
     next_m = curr + timedelta(days=num_days)
     return prev_m.year, prev_m.month, next_m.year, next_m.month
 
-# ==========================================
-# FLASK WEB ROUTES CONTROLLER
-# ==========================================
+# --- FLASK WEB ROUTES CONTROLLER ---
+
 @app.route('/')
 def index():
     today = datetime.today()
@@ -249,30 +267,49 @@ def index():
         d = start_week + timedelta(days=i)
         d_str = d.strftime("%Y-%m-%d")
         week_data.append({
-            "date": d_str, "name": day_names[i], "data": get_or_create_data(d_str)
+            "date": d_str,
+            "name": day_names[i],
+            "data": get_or_create_data(d_str)
         })
     
-    # Render giao diện từ file index.html
-    return render_template('index.html', active="tasks", week_data=week_data, tasks=TASKS, selected_date=selected_date)
+    # LƯU Ý: Đã thay đổi thành render_template
+    return render_template(
+        'index.html', 
+        active="tasks", 
+        week_data=week_data, 
+        tasks=TASKS, 
+        selected_date=selected_date
+    )
 
 @app.route('/history_tasks')
 def history_tasks():
     today = datetime.today()
     year = request.args.get('year', today.year, type=int)
     month = request.args.get('month', today.month, type=int)
-    
     years = [2024, 2025, 2026]
     months = list(range(1, 13))
-    
     num_days = calendar.monthrange(year, month)[1]
     month_data = []
+    
     for day in range(1, num_days + 1):
         d_str = f"{year}-{month:02d}-{day:02d}"
-        month_data.append({"date": d_str, "day_num": day, "data": get_or_create_data(d_str)})
+        month_data.append({
+            "date": d_str,
+            "day_num": day,
+            "data": get_or_create_data(d_str)
+        })
         
-    return render_template('index.html', active="history_tasks", years=years, months=months, 
-                           selected_year=year, selected_month=month, month_data=month_data, 
-                           tasks=TASKS, selected_date=None)
+    return render_template(
+        'index.html', 
+        active="history_tasks", 
+        years=years, 
+        months=months, 
+        selected_year=year, 
+        selected_month=month, 
+        month_data=month_data, 
+        tasks=TASKS, 
+        selected_date=None
+    )
 
 @app.route('/expenses')
 def expenses():
@@ -285,10 +322,20 @@ def expenses():
     prev_y, prev_m, next_y, next_m = get_prev_next_month(year, month)
     all_expense_data = get_all_expense_data(year, month)
     
-    return render_template('index.html', active="exp", selected_year=year, selected_month=month,
-                           prev_year=prev_y, prev_month=prev_m, next_year=next_y, next_month=next_m,
-                           init_tab=tab, init_sec=sec, exp_monthly=all_expense_data["exp_monthly"],
-                           bdData=all_expense_data["bdData"])
+    return render_template(
+        'index.html',
+        active="exp",
+        selected_year=year,
+        selected_month=month,
+        prev_year=prev_y,
+        prev_month=prev_m,
+        next_year=next_y,
+        next_month=next_m,
+        init_tab=tab,
+        init_sec=sec,
+        exp_monthly=all_expense_data["exp_monthly"],
+        bdData=all_expense_data["bdData"]
+    )
 
 @app.route('/api/expenses_data')
 def api_expenses_data():
@@ -306,13 +353,23 @@ def add_transaction():
     except ValueError:
         amount = 0
         
-    category = request.form.get('category_out', 'Chưa phân loại') if t_type == 'out' else request.form.get('category_in', 'Khác (Thu)')
+    if t_type == 'out':
+        category = request.form.get('category_out', 'Chưa phân loại')
+    else:
+        category = request.form.get('category_in', 'Khác (Thu)')
         
     today_str = datetime.today().strftime("%Y-%m-%d")
     data = get_or_create_data(today_str)
     now_time = datetime.now().strftime("%H:%M")
     
-    new_txn = {"type": t_type, "category": category, "desc": desc, "amount": amount, "time": now_time}
+    new_txn = {
+        "type": t_type,
+        "category": category,
+        "desc": desc,
+        "amount": amount,
+        "time": now_time
+    }
+    
     data["expenses"].append(new_txn)
     save_data(today_str, data)
     
@@ -322,35 +379,68 @@ def add_transaction():
 def complete_task(date_str, index):
     uncheck = request.args.get('uncheck', '0')
     data = get_or_create_data(date_str)
+    
     if index < len(data["status"]):
         data["status"][index] = (uncheck != '1')
         save_data(date_str, data)
+        
     return jsonify({"success": True})
 
-# ==========================================
-# KHỞI TẠO PWA (Ứng dụng trên điện thoại)
-# ==========================================
+# CÁC ROUTE PHỤC VỤ DỮ LIỆU CẤU HÌNH CHO ỨNG DỤNG PWA (Cài ra màn hình chính)
 @app.route('/manifest.json')
 def serve_manifest():
-    return jsonify({
-        "name": "Bình Kỷ Luật",
-        "short_name": "BinhApp",
-        "description": "Ứng dụng PWA quản lý chi tiêu và kỷ luật",
+    manifest_data = {
+        "name": "Bình Kỷ Luật & Chi Tiêu",
+        "short_name": "BinhKyLuat",
+        "description": "Ứng dụng PWA quản lý chi tiêu và theo dõi kỷ luật của Bình.",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#f8f9fa",
         "theme_color": "#d82d8b",
-        "icons": [{"src": "/static/icon.png", "sizes": "512x512", "type": "image/png"}]
-    })
+        "orientation": "portrait-primary",
+        "icons": [
+            {
+                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=192&h=192&fit=crop",
+                "sizes": "192x192",
+                "type": "image/jpeg"
+            },
+            {
+                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=512&h=512&fit=crop",
+                "sizes": "512x512",
+                "type": "image/jpeg"
+            }
+        ]
+    }
+    return jsonify(manifest_data)
 
 @app.route('/sw.js')
 def serve_sw():
     sw_code = """
-    const CACHE_NAME = 'binh-app-v1';
-    const ASSETS = ['/', '/expenses', '/history_tasks', '/static/icon.png'];
-    self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS))); });
-    self.addEventListener('fetch', e => {
-        e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
+    const CACHE_NAME = 'binh-kyluat-v1';
+    const ASSETS_TO_CACHE = [
+        '/',
+        '/expenses',
+        '/history_tasks'
+    ];
+    self.addEventListener('install', event => {
+        event.waitUntil(
+            caches.open(CACHE_NAME).then(cache => {
+                return cache.addAll(ASSETS_TO_CACHE);
+            }).then(() => self.skipWaiting())
+        );
+    });
+    self.addEventListener('activate', event => {
+        event.waitUntil(self.clients.claim());
+    });
+    self.addEventListener('fetch', event => {
+        event.respondWith(
+            caches.match(event.request).then(cachedResponse => {
+                if (cachedResponse) {
+                    return cachedResponse;
+                }
+                return fetch(event.request);
+            })
+        );
     });
     """
     response = make_response(sw_code)
