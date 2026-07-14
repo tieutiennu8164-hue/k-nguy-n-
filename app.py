@@ -17,7 +17,6 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     supabase = None
 
-
 # Danh sách nhiệm vụ
 TASKS = [
     "1. Dậy sớm trước 8:00", "2. Uống một cốc nước", "3. Đánh răng rửa mặt",
@@ -135,7 +134,6 @@ def get_financials_in_range(start_date, end_date):
 
     if supabase:
         try:
-            # Truy vấn 1 lần từ Supabase để tăng tốc độ
             response = supabase.table("user_tasks").select("*").gte("date_str", start_str).lte("date_str", end_str).execute()
             fetched_data = {row["date_str"]: row for row in response.data}
         except Exception as e:
@@ -272,7 +270,6 @@ def index():
             "data": get_or_create_data(d_str)
         })
     
-    # LƯU Ý: Đã thay đổi thành render_template
     return render_template(
         'index.html', 
         active="tasks", 
@@ -386,7 +383,6 @@ def complete_task(date_str, index):
         
     return jsonify({"success": True})
 
-# CÁC ROUTE PHỤC VỤ DỮ LIỆU CẤU HÌNH CHO ỨNG DỤNG PWA (Cài ra màn hình chính)
 @app.route('/manifest.json')
 def serve_manifest():
     manifest_data = {
@@ -415,12 +411,11 @@ def serve_manifest():
 
 @app.route('/sw.js')
 def serve_sw():
+    # Đã sửa lại lỗi bộ nhớ đệm (Cache) khiến không thể chuyển trang
     sw_code = """
-    const CACHE_NAME = 'binh-kyluat-v2';
+    const CACHE_NAME = 'binh-kyluat-v3';
     const ASSETS_TO_CACHE = [
-        '/',
-        '/expenses',
-        '/history_tasks'
+        '/'
     ];
     self.addEventListener('install', event => {
         event.waitUntil(
@@ -430,15 +425,22 @@ def serve_sw():
         );
     });
     self.addEventListener('activate', event => {
+        event.waitUntil(
+            caches.keys().then(keyList => {
+                return Promise.all(keyList.map(key => {
+                    if (key !== CACHE_NAME) {
+                        return caches.delete(key);
+                    }
+                }));
+            })
+        );
         event.waitUntil(self.clients.claim());
     });
     self.addEventListener('fetch', event => {
+        // LUÔN ƯU TIÊN TẢI DỮ LIỆU TỪ MẠNG (NETWORK FIRST)
         event.respondWith(
-            caches.match(event.request).then(cachedResponse => {
-                if (cachedResponse) {
-                    return cachedResponse;
-                }
-                return fetch(event.request);
+            fetch(event.request).catch(function() {
+                return caches.match(event.request);
             })
         );
     });
