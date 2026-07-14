@@ -1,237 +1,3 @@
-import json
-import os
-import calendar
-from datetime import datetime, timedelta
-from flask import Flask, render_template_string, redirect, request, jsonify, make_response
-
-app = Flask(__name__)
-DATA_DIR = "."
-
-# Danh sách nhiệm vụ
-TASKS = [
-    "1. Dậy sớm trước 8:00", "2. Uống một cốc nước", "3. Đánh răng rửa mặt",
-    "4. Ăn sáng trước 8:00", "5. Không dùng ĐT 30p đầu ngày", "6. Làm việc",
-    "7. Hít đất 200 cái", "8. Kéo xà 100 cái", "9. Uống đủ 2 lít nước",
-    "10. Học 30p kiến thức mới & Ghi lại", "11. Dành ra 1 tiếng để học tập"
-]
-
-# MAP DANH MỤC CHI TIÊU
-CHILD_CATEGORIES = {
-    "Ăn uống": {"color": "#f97316", "parent": "Chi tiêu - sinh hoạt", "icon": "🍲"},
-    "Hóa đơn": {"color": "#34d399", "parent": "Chi phí cố định", "icon": "🧾"},
-    "Mua sắm": {"color": "#facc15", "parent": "Chi tiêu - sinh hoạt", "icon": "🛒"},
-    "Di chuyển": {"color": "#60a5fa", "parent": "Chi tiêu - sinh hoạt", "icon": "🚗"},
-    "Giải trí": {"color": "#fb7185", "parent": "Chi phí phát sinh", "icon": "🎬"},
-    "Chưa phân loại": {"color": "#f472b6", "parent": "Chưa phân loại", "icon": "❔"}
-}
-
-PARENT_CATEGORIES = {
-    "Chi tiêu - sinh hoạt": {"color": "#f97316", "icon": "📄"},
-    "Chi phí phát sinh": {"color": "#facc15", "icon": "💰"},
-    "Chi phí cố định": {"color": "#60a5fa", "icon": "🏠"},
-    "Chưa phân loại": {"color": "#f472b6", "icon": "❔"}
-}
-
-# MAP DANH MỤC THU NHẬP
-INCOME_CATEGORIES = {
-    "Tiền lương": {"color": "#22c55e", "icon": "💵"},
-    "Tiền thưởng": {"color": "#3b82f6", "icon": "🎁"},
-    "Đầu tư/Lãi": {"color": "#8b5cf6", "icon": "📈"},
-    "Khác (Thu)": {"color": "#ec4899", "icon": "💰"}
-}
-
-def save_data(date_str, data):
-    file_path = os.path.join(DATA_DIR, f"data_{date_str}.json")
-    save_payload = {
-        "date": data.get("date", date_str),
-        "status": data.get("status", [False]*len(TASKS)),
-        "expenses": data.get("expenses", [])
-    }
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(save_payload, f, ensure_ascii=False, indent=4)
-
-def process_financials(data):
-    data["list_in"] = [e for e in data.get("expenses", []) if e.get("type") == "in"]
-    data["list_out"] = [e for e in data.get("expenses", []) if e.get("type", "out") == "out"]
-    data["total_in"] = sum(e.get("amount", 0) for e in data["list_in"])
-    data["total_out"] = sum(e.get("amount", 0) for e in data["list_out"])
-    return data
-
-def get_or_create_data(date_str):
-    file_path = os.path.join(DATA_DIR, f"data_{date_str}.json")
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except Exception:
-                data = {"date": date_str, "status": [False]*len(TASKS), "expenses": []}
-    else:
-        data = {"date": date_str, "status": [False]*len(TASKS), "expenses": []}
-        save_data(date_str, data)
-    return process_financials(data)
-
-def generate_chart_info(totals_dict, color_map, total_amount):
-    active_cats = {k: v for k, v in totals_dict.items() if v > 0}
-    sorted_cats = sorted(active_cats.items(), key=lambda x: x[1], reverse=True)
-    
-    chart_data = []
-    conic_gradient = []
-    current_percent = 0
-    
-    for cat, amount in sorted_cats:
-        pct = (amount / total_amount) * 100 if total_amount > 0 else 0
-        info = color_map.get(cat, {"color": "#9ca3af", "icon": "📦"})
-        
-        chart_data.append({
-            "name": cat, 
-            "amount": amount, 
-            "pct": round(pct), 
-            "color": info["color"],
-            "icon": info["icon"]
-        })
-        
-        next_percent = current_percent + pct
-        if len(sorted_cats) > 1 and pct > 1.5:
-            conic_gradient.append(f"{info['color']} {current_percent}% {next_percent - 1.5}%")
-            conic_gradient.append(f"white {next_percent - 1.5}% {next_percent}%")
-        else:
-            conic_gradient.append(f"{info['color']} {current_percent}% {next_percent}%")
-            
-        current_percent = next_percent
-
-    if not conic_gradient:
-        conic_gradient = ["#e2e8f0 0% 100%"]
-        
-    return chart_data, ", ".join(conic_gradient)
-
-# --- CORE TÍNH TOÁN THEO KHOẢNG THỜI GIAN MỞ RỘNG (TUẦN/THÁNG/NĂM) ---
-def get_financials_in_range(start_date, end_date):
-    total_in = 0
-    total_out = 0
-    
-    child_totals = {cat: 0 for cat in CHILD_CATEGORIES.keys()}
-    parent_totals = {cat: 0 for cat in PARENT_CATEGORIES.keys()}
-    income_totals = {cat: 0 for cat in INCOME_CATEGORIES.keys()}
-    
-    all_transactions = []
-    current_date = start_date
-
-    while current_date <= end_date:
-        d_str = current_date.strftime("%Y-%m-%d")
-        file_path = os.path.join(DATA_DIR, f"data_{d_str}.json")
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                    for e in data.get("expenses", []):
-                        amt = e.get("amount", 0)
-                        t_type = e.get("type", "out")
-                        
-                        t_detail = {
-                            "date": d_str,
-                            "time": e.get("time", ""),
-                            "desc": e.get("desc", "Không có diễn giải"),
-                            "amount": amt,
-                            "type": t_type
-                        }
-
-                        if t_type == "in":
-                            total_in += amt
-                            cat = e.get("category", "Khác (Thu)")
-                            if cat not in INCOME_CATEGORIES:
-                                cat = "Khác (Thu)"
-                            income_totals[cat] += amt
-                            t_detail["category"] = cat
-                            t_detail["icon"] = INCOME_CATEGORIES[cat]["icon"]
-                        else:
-                            total_out += amt
-                            cat = e.get("category", "Chưa phân loại")
-                            if cat not in CHILD_CATEGORIES:
-                                cat = "Chưa phân loại"
-                            
-                            child_totals[cat] += amt
-                            parent_cat = CHILD_CATEGORIES[cat]["parent"]
-                            parent_totals[parent_cat] += amt
-                            
-                            t_detail["category"] = cat
-                            t_detail["parent_category"] = parent_cat
-                            t_detail["icon"] = CHILD_CATEGORIES[cat]["icon"]
-                            
-                        all_transactions.append(t_detail)
-                except Exception:
-                    pass
-        current_date += timedelta(days=1)
-
-    child_chart_data, child_gradient = generate_chart_info(child_totals, CHILD_CATEGORIES, total_out)
-    parent_chart_data, parent_gradient = generate_chart_info(parent_totals, PARENT_CATEGORIES, total_out)
-    income_chart_data, income_gradient = generate_chart_info(income_totals, INCOME_CATEGORIES, total_in)
-    
-    all_transactions.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
-
-    return {
-        "total_in": total_in,
-        "total_out": total_out,
-        "child_chart_data": child_chart_data,
-        "child_gradient": child_gradient,
-        "parent_chart_data": parent_chart_data,
-        "parent_gradient": parent_gradient,
-        "income_chart_data": income_chart_data,
-        "income_gradient": income_gradient,
-        "transactions": all_transactions
-    }
-
-def get_all_expense_data(year, month):
-    today = datetime.today()
-    
-    # KỲ XEM TÌNH HÌNH (THÁNG CHỈ ĐỊNH)
-    _, num_days = calendar.monthrange(year, month)
-    month_start = datetime(year, month, 1)
-    month_end = datetime(year, month, num_days)
-    exp_monthly = get_financials_in_range(month_start, month_end)
-
-    # DỮ LIỆU BIẾN ĐỘNG THU CHI (SO SÁNH TUẦN / THÁNG / NĂM HIỆN TẠI)
-    # 1. Tháng
-    curr_month_start = datetime(today.year, today.month, 1)
-    _, curr_month_days = calendar.monthrange(today.year, today.month)
-    curr_month_end = datetime(today.year, today.month, curr_month_days)
-
-    prev_m_date = curr_month_start - timedelta(days=1)
-    prev_month_start = datetime(prev_m_date.year, prev_m_date.month, 1)
-    _, prev_month_days = calendar.monthrange(prev_m_date.year, prev_m_date.month)
-    prev_month_end = datetime(prev_m_date.year, prev_m_date.month, prev_month_days)
-
-    # 2. Tuần
-    curr_week_start = today - timedelta(days=today.weekday())
-    curr_week_end = curr_week_start + timedelta(days=6)
-    prev_week_start = curr_week_start - timedelta(days=7)
-    prev_week_end = prev_week_start + timedelta(days=6)
-
-    # 3. Năm
-    curr_year_start = datetime(today.year, 1, 1)
-    curr_year_end = datetime(today.year, 12, 31)
-    prev_year_start = datetime(today.year - 1, 1, 1)
-    prev_year_end = datetime(today.year - 1, 12, 31)
-
-    return {
-        "exp_monthly": exp_monthly,
-        "bdData": {
-            "month": {
-                "curr": get_financials_in_range(curr_month_start, curr_month_end),
-                "prev": get_financials_in_range(prev_month_start, prev_month_end)
-            },
-            "week": {
-                "curr": get_financials_in_range(curr_week_start, curr_week_end),
-                "prev": get_financials_in_range(prev_week_start, prev_week_end)
-            },
-            "year": {
-                "curr": get_financials_in_range(curr_year_start, curr_year_end),
-                "prev": get_financials_in_range(prev_year_start, prev_year_end)
-            }
-        }
-    }
-
-
-HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -291,7 +57,7 @@ HTML_TEMPLATE = """
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); z-index: 100; justify-content: center; align-items: flex-end; }
         .modal-box { background: white; width: 100%; padding: 20px; border-radius: 20px 20px 0 0; animation: slideUp 0.3s ease-out; position: relative; }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-                
+        
         .type-btn { flex: 1; padding: 12px; text-align: center; border-radius: 8px; border: 1px solid #cbd5e1; color: #64748b; font-weight: bold; font-size: 14px; cursor: pointer; transition: 0.2s; }
         .type-btn.active-out { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
         .type-btn.active-in { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
@@ -330,18 +96,6 @@ HTML_TEMPLATE = """
         .chart-toggle-btn { padding: 6px 14px; border: 1px solid #cbd5e1; background: white; font-size: 12px; color: #64748b; font-weight: bold; border-radius: 20px; cursor: pointer; transition: 0.2s; }
         .chart-toggle-btn.active { background: #1e293b; color: white; border-color: #1e293b; }
     </style>
-    
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function() {
-                navigator.serviceWorker.register('/sw.js').then(function(registration) {
-                    console.log('ServiceWorker đăng ký thành công với scope: ', registration.scope);
-                }, function(err) {
-                    console.log('ServiceWorker đăng ký thất bại: ', err);
-                });
-            });
-        }
-    </script>
 </head>
 <body>
 
@@ -509,7 +263,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="domino-container">
                     {% for m in months %}
-                    <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
+                                        <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
                     {% endfor %}
                 </div>
                 <div class="domino-container" style="margin-bottom: 10px;">
@@ -568,7 +322,7 @@ HTML_TEMPLATE = """
                 </div>
 
                 <div id="categoryGroupIn" style="display: none;">
-                                        <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Nguồn Thu</label>
+                    <label style="font-size: 13px; font-weight: bold; color: #64748b; margin-bottom: 8px; display: block;">Nguồn Thu</label>
                     <select name="category_in" class="form-select">
                         <option value="Tiền lương">💵 Tiền lương</option>
                         <option value="Tiền thưởng">🎁 Tiền thưởng</option>
@@ -602,7 +356,6 @@ HTML_TEMPLATE = """
     <script>
         {% if active == 'exp' %}
         
-        // CÁC BIẾN CÓ THỂ ĐƯỢC CẬP NHẬT LẠI KHI THÊM GIAO DỊCH (ĐÃ SỬA LỖI XUỐNG DÒNG CŨ)
         let childData = {{ exp_monthly.child_chart_data | tojson | safe }};
         let parentData = {{ exp_monthly.parent_chart_data | tojson | safe }};
         let incomeData = {{ exp_monthly.income_chart_data | tojson | safe }};
@@ -610,11 +363,8 @@ HTML_TEMPLATE = """
         let parentGradient = "{{ exp_monthly.parent_gradient }}";
         let incomeGradient = "{{ exp_monthly.income_gradient }}";
         let allTransactions = {{ exp_monthly.transactions | tojson | safe }};
-        
-        // BỘ DỮ LIỆU ĐẦY ĐỦ CHO TUẦN / THÁNG / NĂM
         let bdData = {{ bdData | tojson | safe }};
 
-        // CÁC BIẾN TRẠNG THÁI
         let currentMainTab = '{{ init_tab }}' || 'out'; 
         let currentSubTab = 'child'; 
         let currentSection = '{{ init_sec }}' || 'tinh-hinh';
@@ -624,7 +374,6 @@ HTML_TEMPLATE = """
         let momoSubTab = 'child';
         let momoTime = 'month';
         
-        // HÀM LẤY LẠI DATA SAU KHI LƯU GIAO DỊCH (KHÔNG TẢI LẠI TRANG)
         function refreshExpenseData() {
             const year = {{ selected_year }};
             const month = {{ selected_month }};
@@ -649,7 +398,6 @@ HTML_TEMPLATE = """
                 });
         }
         
-        // XỬ LÝ SỰ KIỆN GỬI GIAO DỊCH NGẦM
         document.getElementById('addTransactionForm').addEventListener('submit', function(e) {
             e.preventDefault(); 
             const formData = new FormData(this);
@@ -755,7 +503,7 @@ HTML_TEMPLATE = """
                             <span style="font-size: 10px; font-weight: bold; color: #64748b; margin-bottom: 4px;">${item.pct}%</span>
                             <div style="width: 22px; height: ${heightPx}px; background: ${item.color}; border-radius: 4px 4px 0 0;"></div>
                             <span style="font-size: 15px; margin-top: 5px;" title="${item.name}">${item.icon}</span>
-                        </div>
+                           </div>
                     `;
                 });
             }
@@ -882,7 +630,7 @@ HTML_TEMPLATE = """
                 let diff = currVal - prevVal;
                 if(diff >= 0) {
                     insightHtml = `<span style="color:#ef4444">↗ Tăng ${diff.toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
-                                        document.getElementById('momo-summary-insight').style.background = "#fef2f2";
+                    document.getElementById('momo-summary-insight').style.background = "#fef2f2";
                 } else {
                     insightHtml = `<span style="color:#22c55e">↘ Giảm ${Math.abs(diff).toLocaleString('en-US')}đ</span> so với ${timeText} trước`;
                     document.getElementById('momo-summary-insight').style.background = "#f0fdf4";
@@ -969,7 +717,7 @@ HTML_TEMPLATE = """
                 let cAmt = currItem ? currItem.amount : 0;
                 let pAmt = prevItem ? prevItem.amount : 0;
                 let icon = currItem ? currItem.icon : (prevItem ? prevItem.icon : "❔");
-                let color = currItem ? currItem.color : (prevItem ? prevItem.icon ? prevItem.color : "#9ca3af" : "#9ca3af");
+                let color = currItem ? currItem.color : (prevItem ? prevItem.color : "#9ca3af");
                 
                 let diffAmt = cAmt - pAmt;
                 let diffHtml = "";
@@ -1041,7 +789,6 @@ HTML_TEMPLATE = """
             currentTaskIndex = index;
             isTaskCurrentlyDone = isDone;
             currentTaskBtn = btnElement;
-
             if (isDone) {
                 document.getElementById('taskConfirmMsg').innerText = "Bạn muốn hủy hoàn thành nhiệm vụ này?";
                 currentActionUrl = "/complete/" + date + "/" + index + "?uncheck=1";
@@ -1088,225 +835,17 @@ HTML_TEMPLATE = """
             el.classList.add('active');
         }
     </script>
+    
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('/sw.js').then(function(registration) {
+                    console.log('ServiceWorker đăng ký thành công!');
+                }).catch(function(err) {
+                    console.log('Lỗi:', err);
+                });
+            });
+        }
+    </script>
 </body>
 </html>
-"""
-
-def get_prev_next_month(year, month):
-    curr = datetime(year, month, 1)
-    prev_m = curr - timedelta(days=1)
-    num_days = calendar.monthrange(year, month)[1]
-    next_m = curr + timedelta(days=num_days)
-    return prev_m.year, prev_m.month, next_m.year, next_m.month
-
-# --- FLASK WEB ROUTES CONTROLLER ---
-
-@app.route('/')
-def index():
-    today = datetime.today()
-    start_week = today - timedelta(days=today.weekday())
-    week_data = []
-        
-    selected_date = request.args.get('date', today.strftime("%Y-%m-%d"))
-    
-    day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"]
-    for i in range(7):
-        d = start_week + timedelta(days=i)
-        d_str = d.strftime("%Y-%m-%d")
-        week_data.append({
-            "date": d_str,
-            "name": day_names[i],
-            "data": get_or_create_data(d_str)
-        })
-    
-    return render_template_string(
-        HTML_TEMPLATE, 
-        active="tasks", 
-        week_data=week_data, 
-        tasks=TASKS, 
-        selected_date=selected_date
-    )
-
-@app.route('/history_tasks')
-def history_tasks():
-    today = datetime.today()
-    year = request.args.get('year', today.year, type=int)
-    month = request.args.get('month', today.month, type=int)
-    
-    years = [2024, 2025, 2026]
-    months = list(range(1, 13))
-    
-    num_days = calendar.monthrange(year, month)[1]
-    month_data = []
-    for day in range(1, num_days + 1):
-        d_str = f"{year}-{month:02d}-{day:02d}"
-        month_data.append({
-            "date": d_str,
-            "day_num": day,
-            "data": get_or_create_data(d_str)
-        })
-        
-    return render_template_string(
-        HTML_TEMPLATE, 
-        active="history_tasks", 
-        years=years, 
-        months=months, 
-        selected_year=year, 
-        selected_month=month, 
-        month_data=month_data, 
-        tasks=TASKS, 
-        selected_date=None
-    )
-
-@app.route('/expenses')
-def expenses():
-    today = datetime.today()
-    year = request.args.get('year', today.year, type=int)
-    month = request.args.get('month', today.month, type=int)
-    tab = request.args.get('tab', 'out')
-    sec = request.args.get('sec', 'tinh-hinh')
-    
-    prev_y, prev_m, next_y, next_m = get_prev_next_month(year, month)
-    
-    # Lấy toàn bộ khối dữ liệu gộp (tất cả các khoảng thời gian)
-    all_expense_data = get_all_expense_data(year, month)
-    
-    return render_template_string(
-        HTML_TEMPLATE,
-        active="exp",
-        selected_year=year,
-        selected_month=month,
-        prev_year=prev_y,
-        prev_month=prev_m,
-        next_year=next_y,
-        next_month=next_m,
-        init_tab=tab,
-        init_sec=sec,
-        exp_monthly=all_expense_data["exp_monthly"],
-        bdData=all_expense_data["bdData"]
-    )
-
-# --- API CHO FRONTEND (Lấy lại dữ liệu mà không cần tải lại web) ---
-@app.route('/api/expenses_data')
-def api_expenses_data():
-    year = request.args.get('year', datetime.today().year, type=int)
-    month = request.args.get('month', datetime.today().month, type=int)
-    all_expense_data = get_all_expense_data(year, month)
-    return jsonify(all_expense_data)
-
-# ĐƠN VỊ THÊM GIAO DỊCH QUA JSON
-@app.route('/add', methods=['POST'])
-def add_transaction():
-    t_type = request.form.get('type', 'out')
-    desc = request.form.get('desc', 'Không rõ')
-    try:
-        amount = float(request.form.get('amount', 0))
-    except ValueError:
-        amount = 0
-        
-    if t_type == 'out':
-        category = request.form.get('category_out', 'Chưa phân loại')
-    else:
-        category = request.form.get('category_in', 'Khác (Thu)')
-        
-    today_str = datetime.today().strftime("%Y-%m-%d")
-    data = get_or_create_data(today_str)
-    now_time = datetime.now().strftime("%H:%M")
-    
-    new_txn = {
-        "type": t_type,
-        "category": category,
-        "desc": desc,
-        "amount": amount,
-        "time": now_time
-    }
-    
-    data["expenses"].append(new_txn)
-    save_data(today_str, data)
-    
-    return jsonify({"success": True})
-
-@app.route('/complete/<date_str>/<int:index>')
-def complete_task(date_str, index):
-    uncheck = request.args.get('uncheck', '0')
-    data = get_or_create_data(date_str)
-    
-    if index < len(data["status"]):
-        data["status"][index] = (uncheck != '1')
-        save_data(date_str, data)
-        
-    return jsonify({"success": True})
-
-
-# ======================================================================
-# PHẦN ĐƯỢC BỔ SUNG: CÁC ROUTE PHỤC VỤ DỮ LIỆU CẤU HÌNH CHO ỨNG DỤNG PWA
-# ======================================================================
-
-@app.route('/manifest.json')
-def serve_manifest():
-    """Cung cấp thông tin khai báo App để trình duyệt điện thoại cho phép Cài đặt (Add to Home Screen)"""
-    manifest_data = {
-        "name": "Bình Kỷ Luật & Chi Tiêu",
-        "short_name": "BinhKyLuat",
-        "description": "Ứng dụng PWA quản lý chi tiêu và theo dõi kỷ luật của Bình.",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#f8f9fa",
-        "theme_color": "#d82d8b",
-        "orientation": "portrait-primary",
-        "icons": [
-            {
-                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=192&h=192&fit=crop",
-                "sizes": "192x192",
-                "type": "image/jpeg"
-            },
-            {
-                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=512&h=512&fit=crop",
-                "sizes": "512x512",
-                "type": "image/jpeg"
-            }
-        ]
-    }
-    return jsonify(manifest_data)
-
-@app.route('/sw.js')
-def serve_sw():
-    """Cung cấp Service Worker quản lý việc cài đặt ngầm giúp App hoạt động mượt mà ổn định hơn"""
-    sw_code = """
-    const CACHE_NAME = 'binh-kyluat-v1';
-    const ASSETS_TO_CACHE = [
-        '/',
-        '/expenses',
-        '/history_tasks'
-    ];
-
-    self.addEventListener('install', event => {
-        event.waitUntil(
-            caches.open(CACHE_NAME).then(cache => {
-                return cache.addAll(ASSETS_TO_CACHE);
-            }).then(() => self.skipWaiting())
-        );
-    });
-
-    self.addEventListener('activate', event => {
-        event.waitUntil(self.clients.claim());
-    });
-
-    self.addEventListener('fetch', event => {
-        event.respondWith(
-            caches.match(event.request).then(cachedResponse => {
-                if (cachedResponse) {
-                    return cachedResponse;
-                }
-                return fetch(event.request);
-            })
-        );
-    });
-    """
-    response = make_response(sw_code)
-    response.headers['Content-Type'] = 'application/javascript'
-    return response
-
-if __name__ == '__main__':
-    app.run(debug=True, port=8080)
-        
