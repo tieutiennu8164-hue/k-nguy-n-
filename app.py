@@ -8,15 +8,15 @@ from supabase import create_client, Client
 app = Flask(__name__)
 
 # --- KẾT NỐI SUPABASE ---
-# Lấy URL và KEY từ biến môi trường của Render
-SUPABASE_URL = os.environ.get("https://leuwptvyrmqueyfgdeuo.supabase.co", "")
-SUPABASE_KEY = os.environ.get("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://leuwptvyrmqueyfgdeuo.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ")
 
-# Khởi tạo Supabase (chỉ khởi tạo nếu có key)
+# Khởi tạo Supabase
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     supabase = None
+
 
 # Danh sách nhiệm vụ
 TASKS = [
@@ -390,9 +390,9 @@ def complete_task(date_str, index):
 @app.route('/manifest.json')
 def serve_manifest():
     manifest_data = {
-        "name": "Bình Kỷ Luật & Chi Tiêu",
-        "short_name": "BinhKyLuat",
-        "description": "Ứng dụng PWA quản lý chi tiêu và theo dõi kỷ luật của Bình.",
+        "name": "Kỷ Nguyên Đồ Đá",
+        "short_name": "Kỷ Nguyên",
+        "description": "Ứng dụng quản lý chi tiêu và theo dõi kỷ luật của Bình.",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#f8f9fa",
@@ -400,14 +400,14 @@ def serve_manifest():
         "orientation": "portrait-primary",
         "icons": [
             {
-                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=192&h=192&fit=crop",
+                "src": "/static/icon.png",
                 "sizes": "192x192",
-                "type": "image/jpeg"
+                "type": "image/png"
             },
             {
-                "src": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=512&h=512&fit=crop",
+                "src": "/static/icon.png",
                 "sizes": "512x512",
-                "type": "image/jpeg"
+                "type": "image/png"
             }
         ]
     }
@@ -416,7 +416,7 @@ def serve_manifest():
 @app.route('/sw.js')
 def serve_sw():
     sw_code = """
-    const CACHE_NAME = 'binh-kyluat-v1';
+    const CACHE_NAME = 'binh-kyluat-v2';
     const ASSETS_TO_CACHE = [
         '/',
         '/expenses',
