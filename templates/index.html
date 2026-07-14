@@ -232,12 +232,12 @@
                 </div>
                 <div class="domino-container" style="margin-bottom: 20px;">
                     {% for d in week_data %}
-                    <div class="domino-btn {% if selected_date == d.date %}active{% endif %}" onclick="showDay('{{ d.date }}', this)">{{ d.name }}</div>
+                    <div class="domino-btn {% if selected_date == d.date or (not selected_date and loop.first) %}active{% endif %}" onclick="showDay('{{ d.date }}', this)">{{ d.name }}</div>
                     {% endfor %}
                 </div>
                 {% for d in week_data %}
-                <div id="day-{{ d.date }}" class="task-list {% if selected_date == d.date %}active{% endif %}">
-                    <h3 style="color:#475569; font-size: 14px;">{{ d.name }} ({{ d.date }})</h3>
+                <div id="day-{{ d.date }}" class="task-list {% if selected_date == d.date or (not selected_date and loop.first) %}active{% endif %}">
+                    <h3 style="color:#475569; font-size: 14px;">{{ d.name }}</h3>
                     {% for i in range(tasks|length) %}
                     <div class="task-card">
                         <span style="font-size:14px; font-weight: 500;">{{ tasks[i] }}</span>
@@ -262,8 +262,8 @@
                     {% endfor %}
                 </div>
                 <div class="domino-container">
-                    {% for m in months %}
-                                        <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
+                                        {% for m in months %}
+                    <a href="/history_tasks?year={{ selected_year }}&month={{ m }}" class="domino-btn {% if m == selected_month %}active{% endif %}">Th.{{ m }}</a>
                     {% endfor %}
                 </div>
                 <div class="domino-container" style="margin-bottom: 10px;">
@@ -498,7 +498,7 @@
             } else {
                 data.forEach(item => {
                     const heightPx = item.pct > 0 ? (item.pct * 1.1) + 12 : 12; 
-                    barColumnsContainer.innerHTML += `
+                                                 barColumnsContainer.innerHTML += `
                         <div style="display: flex; flex-direction: column; align-items: center; width: 50px;">
                             <span style="font-size: 10px; font-weight: bold; color: #64748b; margin-bottom: 4px;">${item.pct}%</span>
                             <div style="width: 22px; height: ${heightPx}px; background: ${item.color}; border-radius: 4px 4px 0 0;"></div>
@@ -693,6 +693,7 @@
             if (momoActiveTab === 'in') {
                 currList = currObj.income_chart_data; 
                 prevList = prevObj.income_chart_data;
+            
             } else {
                 if (momoSubTab === 'child') {
                     currList = currObj.child_chart_data; 
@@ -849,3 +850,5 @@
     </script>
 </body>
 </html>
+
+                
