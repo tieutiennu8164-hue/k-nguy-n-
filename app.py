@@ -8,9 +8,9 @@ from supabase import create_client, Client
 app = Flask(__name__)
 
 # --- KẾT NỐI SUPABASE ---
-# LƯU Ý CHO BÌNH: NẾU DÙNG TÀI KHOẢN MỚI, HÃY THAY LINK VÀ KEY MỚI VÀO 2 DÒNG DƯỚI ĐÂY NHÉ!
+# LƯU Ý: THAY ĐƯỜNG LINK VÀ KEY CỦA TÀI KHOẢN MỚI VÀO ĐÂY NHÉ!
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://leuwptvyrmqueyfgdeuo.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MzMxMiwiZXhwIjoyMDk5NDM5MzEyfQ.8Pxry-U2EPkG6HapFk3fPd8HXATNkfoAclzf8AeJzBE")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ")
 
 # Khởi tạo Supabase
 if SUPABASE_URL and SUPABASE_KEY:
@@ -64,8 +64,13 @@ def save_data(date_str, data):
         print("Lỗi lưu Supabase:", e)
 
 def process_financials(data):
-    data["list_in"] = [e for e in data.get("expenses", []) if e.get("type") == "in"]
-    data["list_out"] = [e for e in data.get("expenses", []) if e.get("type", "out") == "out"]
+    # LỚP BẢO VỆ 1: Đảm bảo expenses luôn là mảng (list), chống lỗi type từ database
+    expenses_raw = data.get("expenses")
+    if not isinstance(expenses_raw, list):
+        expenses_raw = []
+        
+    data["list_in"] = [e for e in expenses_raw if isinstance(e, dict) and e.get("type") == "in"]
+    data["list_out"] = [e for e in expenses_raw if isinstance(e, dict) and e.get("type", "out") == "out"]
     data["total_in"] = sum(e.get("amount", 0) for e in data["list_in"])
     data["total_out"] = sum(e.get("amount", 0) for e in data["list_out"])
     return data
@@ -145,12 +150,15 @@ def get_financials_in_range(start_date, end_date):
         d_str = current_date.strftime("%Y-%m-%d")
         data = fetched_data.get(d_str, {})
         
-        # BƯỚC KHẮC PHỤC LỖI "LIỆT NÚT": Đảm bảo mảng chi tiêu không bị rỗng/NULL
+        # LỚP BẢO VỆ 2: Loại bỏ hoàn toàn lỗi crash khi expenses bị lệch chuẩn
         expenses_list = data.get("expenses")
-        if expenses_list is None:
+        if not isinstance(expenses_list, list):
             expenses_list = []
             
         for e in expenses_list:
+            if not isinstance(e, dict): 
+                continue
+                
             amt = e.get("amount", 0)
             t_type = e.get("type", "out")
             
@@ -304,7 +312,7 @@ def history_tasks():
         
     return render_template(
         'index.html', 
-        active="history_tasks", 
+        active="history", # Đã fix đồng bộ tên biến với frontend
         years=years, 
         months=months, 
         selected_year=year, 
@@ -327,7 +335,7 @@ def expenses():
     
     return render_template(
         'index.html',
-        active="exp",
+        active="expenses", # Đã fix đồng bộ tên biến với frontend
         selected_year=year,
         selected_month=month,
         prev_year=prev_y,
@@ -417,9 +425,9 @@ def serve_manifest():
 
 @app.route('/sw.js')
 def serve_sw():
-    # Tăng phiên bản bộ nhớ cache lên v4 để ép điện thoại làm mới toàn bộ lỗi cũ!
+    # Tăng phiên bản bộ nhớ cache lên v5
     sw_code = """
-    const CACHE_NAME = 'binh-kyluat-v4';
+    const CACHE_NAME = 'binh-kyluat-v5';
     const ASSETS_TO_CACHE = [
         '/'
     ];
@@ -443,7 +451,6 @@ def serve_sw():
         event.waitUntil(self.clients.claim());
     });
     self.addEventListener('fetch', event => {
-        // LUÔN ƯU TIÊN TẢI DỮ LIỆU TỪ MẠNG (NETWORK FIRST)
         event.respondWith(
             fetch(event.request).catch(function() {
                 return caches.match(event.request);
