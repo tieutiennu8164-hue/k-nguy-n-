@@ -8,8 +8,9 @@ from supabase import create_client, Client
 app = Flask(__name__)
 
 # --- KẾT NỐI SUPABASE ---
+# LƯU Ý CHO BÌNH: NẾU DÙNG TÀI KHOẢN MỚI, HÃY THAY LINK VÀ KEY MỚI VÀO 2 DÒNG DƯỚI ĐÂY NHÉ!
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://leuwptvyrmqueyfgdeuo.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NjMzMTIsImV4cCI6MjA5OTQzOTMxMn0.ZJUgPzV6j7lswvJ9IXvjnXJvmj8tQZX-RtBrrbAojYQ")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxldXdwdHZ5cm1xdWV5ZmdkZXVvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg2MzMxMiwiZXhwIjoyMDk5NDM5MzEyfQ.8Pxry-U2EPkG6HapFk3fPd8HXATNkfoAclzf8AeJzBE")
 
 # Khởi tạo Supabase
 if SUPABASE_URL and SUPABASE_KEY:
@@ -144,7 +145,12 @@ def get_financials_in_range(start_date, end_date):
         d_str = current_date.strftime("%Y-%m-%d")
         data = fetched_data.get(d_str, {})
         
-        for e in data.get("expenses", []):
+        # BƯỚC KHẮC PHỤC LỖI "LIỆT NÚT": Đảm bảo mảng chi tiêu không bị rỗng/NULL
+        expenses_list = data.get("expenses")
+        if expenses_list is None:
+            expenses_list = []
+            
+        for e in expenses_list:
             amt = e.get("amount", 0)
             t_type = e.get("type", "out")
             
@@ -411,9 +417,9 @@ def serve_manifest():
 
 @app.route('/sw.js')
 def serve_sw():
-    # Đã sửa lại lỗi bộ nhớ đệm (Cache) khiến không thể chuyển trang
+    # Tăng phiên bản bộ nhớ cache lên v4 để ép điện thoại làm mới toàn bộ lỗi cũ!
     sw_code = """
-    const CACHE_NAME = 'binh-kyluat-v3';
+    const CACHE_NAME = 'binh-kyluat-v4';
     const ASSETS_TO_CACHE = [
         '/'
     ];
